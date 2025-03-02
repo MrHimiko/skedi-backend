@@ -10,6 +10,10 @@ teams:
     resource: ../src/Plugins/Teams/Controller/
     type: attribute
 
+events:
+    resource: ../src/Plugins/Events/Controller/
+    type: attribute
+
 # billing:
 #     resource: ../src/Plugins/Billing/Controller/
 #     type: attribute

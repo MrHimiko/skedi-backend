@@ -47,6 +47,12 @@ doctrine:
                 dir: '%kernel.project_dir%/src/Plugins/Teams/Entity'
                 prefix: 'App\Plugins\Teams\Entity'
                 alias: Teams
+            Events:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Events/Entity'
+                prefix: 'App\Plugins\Events\Entity'
+                alias: Events
 
             # Account:
             #     is_bundle: false
