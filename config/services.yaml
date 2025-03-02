@@ -1,0 +1,62 @@
+# This file is the entry point to configure your own services.
+# Files in the packages/ subdirectory configure your dependencies.
+
+# Put parameters here that don't need to change on each machine where the app is deployed
+# https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
+parameters:
+
+services:
+    # default configuration for services in *this* file
+    _defaults:
+        autowire: true      # Automatically injects dependencies in your services.
+        autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+
+    # makes classes in src/ available to be used as services
+    # this creates a service per class whose id is the fully-qualified class name
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+    App\Plugins\Account\Listener\RequestListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.request, priority: 10 }
+
+    App\Listener\RequestListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.request, priority: 10 }
+
+    App\Listener\ExceptionListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.exception }
+
+    # App\Plugins\Activity\Listener\EntityListener:
+    #     arguments:
+    #         $logService: '@App\Plugins\Activity\Service\LogService'
+    #         $requestStack: '@request_stack'
+    #     tags:
+    #         - { name: 'doctrine.event_listener', event: 'postPersist', method: 'postPersist' }
+    #         - { name: 'doctrine.event_listener', event: 'postUpdate', method: 'postUpdate' }
+    #         - { name: 'doctrine.event_listener', event: 'postRemove', method: 'postRemove' }
+
+    Aws\S3\S3Client:
+        class: Aws\S3\S3Client
+        arguments:
+            - 
+                region: '%env(CLOUDFLARE_R2_REGION)%'
+                version: 'latest'
+                credentials:
+                    key: '%env(CLOUDFLARE_R2_ACCESS_KEY_ID)%'
+                    secret: '%env(CLOUDFLARE_R2_SECRET_ACCESS_KEY)%'
+                endpoint: 'https://%env(CLOUDFLARE_R2_ACCOUNT_ID)%.r2.cloudflarestorage.com'
+            
+    # App\Plugins\Mailer\Service\EmailService:
+    #     arguments:
+    #         $awsAccessKeyId: '%env(AWS_ACCESS_KEY_ID)%'
+    #         $awsSecretAccessKey: '%env(AWS_SECRET_ACCESS_KEY)%'
+    #         $awsRegion: '%env(AWS_REGION)%'
+
+
+    # add more service definitions when explicit configuration is needed
+    # please note that last definitions always *replace* previous ones
