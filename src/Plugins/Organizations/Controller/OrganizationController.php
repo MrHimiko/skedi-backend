@@ -129,7 +129,7 @@ class OrganizationController extends AbstractController
 
             if($organization->role !== 'admin')
             {
-                return $this->responseService->json(false, 'Organizatdasdasdaasdion was not found.');
+                return $this->responseService->json(false, 'Organization was not found.');
             }
 
             $this->organizationService->update($organization->entity, $data);

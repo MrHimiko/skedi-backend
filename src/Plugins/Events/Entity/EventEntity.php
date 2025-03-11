@@ -21,6 +21,9 @@ class EventEntity
 
     #[ORM\Column(name: "name", type: "string", length: 255, nullable: false)]
     private string $name;
+
+    #[ORM\Column(name: "slug", type: "string", length: 255, nullable: false)]
+    private string $slug;
     
     #[ORM\Column(name: "description", type: "text", nullable: true)]
     private ?string $description = null;
@@ -31,7 +34,11 @@ class EventEntity
     
     #[ORM\ManyToOne(targetEntity: TeamEntity::class)]
     #[ORM\JoinColumn(name: "team_id", referencedColumnName: "id", nullable: true)]
-    private ?TeamEntity $team = null;
+    private ?TeamEntity $team = null;   
+
+    #[ORM\Column(name: "duration", type: "integer", options: ["default" => 30])]
+    private int $duration = 30;
+    
     
     #[ORM\ManyToOne(targetEntity: UserEntity::class)]
     #[ORM\JoinColumn(name: "created_by", referencedColumnName: "id", nullable: false)]
@@ -67,6 +74,17 @@ class EventEntity
         $this->name = $name;
         return $this;
     }
+
+    public function getSlug(): string
+    {
+        return $this->slug;
+    }
+
+    public function setSlug(string $slug): self
+    {
+        $this->slug = $slug;
+        return $this;
+    }
     
     public function getDescription(): ?string
     {
@@ -98,6 +116,18 @@ class EventEntity
     public function setTeam(?TeamEntity $team): self
     {
         $this->team = $team;
+        return $this;
+    }
+
+  
+    public function getDuration(): int
+    {
+        return $this->duration;
+    }
+
+    public function setDuration(int $duration): self
+    {
+        $this->duration = $duration;
         return $this;
     }
     
@@ -144,6 +174,8 @@ class EventEntity
         $data = [
             'id' => $this->getId(),
             'name' => $this->getName(),
+            'slug' => $this->getSlug(),
+            'duration' => $this->getDuration(),
             'description' => $this->getDescription(),
             'organization_id' => $this->getOrganization()->getId(),
             'created_by' => $this->getCreatedBy()->getId(),

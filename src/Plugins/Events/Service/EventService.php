@@ -8,7 +8,7 @@ use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 
 use App\Plugins\Events\Entity\EventEntity;
-use App\Plugins\Events\Entity\EventTimeSlotEntity;
+use App\Plugins\Events\Entity\EventScheduleEntity;
 use App\Plugins\Events\Entity\EventFormFieldEntity;
 use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventAssigneeEntity;
@@ -17,18 +17,22 @@ use App\Plugins\Events\Exception\EventsException;
 use App\Plugins\Organizations\Entity\OrganizationEntity;
 use App\Plugins\Teams\Entity\TeamEntity;
 use App\Plugins\Account\Entity\UserEntity;
+use App\Service\SlugService;
 
 class EventService
 {
     private CrudManager $crudManager;
     private EntityManagerInterface $entityManager;
+    private SlugService $slugService;
 
     public function __construct(
         CrudManager $crudManager,
-        EntityManagerInterface $entityManager
+        EntityManagerInterface $entityManager,
+        SlugService $slugService
     ) {
         $this->crudManager = $crudManager;
         $this->entityManager = $entityManager;
+        $this->slugService = $slugService;
     }
 
     public function getMany(array $filters, int $page, int $limit, array $criteria = []): array
@@ -62,11 +66,41 @@ class EventService
                 $callback($event);
             }
             
+            // Generate slug if not provided
+            if(!array_key_exists('slug', $data)) {
+                $data['slug'] = $data['name'] ?? null;
+            }
+            
+            if ($data['slug']) {
+                $data['slug'] = $this->slugService->generateSlug($data['slug']);
+            }
+            
+            // Extract the nested data before validation
+            $assignees = $data['assignees'] ?? [];
+            $timeSlots = $data['time_slots'] ?? [];
+            $formFields = $data['form_fields'] ?? [];
+            $bookingOptions = $data['booking_options'] ?? [];
+            
+            // Remove nested data from validation
+            unset($data['assignees']);
+            unset($data['time_slots']);
+            unset($data['form_fields']);
+            unset($data['booking_options']);
+            
             $constraints = [
                 'name' => [
                     new Assert\NotBlank(['message' => 'Event name is required.']),
                     new Assert\Type('string'),
                     new Assert\Length(['min' => 2, 'max' => 255]),
+                ],
+                'slug' => [
+                    new Assert\NotBlank(['message' => 'Event slug is required.']),
+                    new Assert\Type('string'),
+                    new Assert\Length(['min' => 2, 'max' => 255]),
+                    new Assert\Regex([
+                        'pattern' => '/^[a-z0-9\-]+$/',
+                        'message' => 'Slug can only contain lowercase letters, numbers, and hyphens.'
+                    ]),
                 ],
                 'description' => new Assert\Optional([
                     new Assert\Type('string'),
@@ -74,18 +108,42 @@ class EventService
                 'team_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
                 ]),
+                'duration' => [
+                    new Assert\Type('integer'),
+                    new Assert\Range(['min' => 15, 'max' => 1440]) 
+                ],
+                'organization_id' => [
+                    new Assert\Type('integer') 
+                ],
             ];
             
-            $this->crudManager->create($event, $data, $constraints);
+            $transform = [
+                'slug' => function(string $value) {
+                    return $this->slugService->generateSlug($value);
+                },
+                'team_id' => function($value) {
+                    if ($value) {
+                        $team = $this->entityManager->getRepository(TeamEntity::class)->find($value);
+                        if (!$team) {
+                            throw new EventsException('Team not found.');
+                        }
+                        return $team;
+                    }
+                    return null;
+                },
+            ];
+            
+            $this->crudManager->create($event, $data, $constraints, $transform);
             
             // Process assignees if provided
-            if (!empty($data['assignees']) && is_array($data['assignees'])) {
-                foreach ($data['assignees'] as $assigneeId) {
-                    $user = $this->entityManager->getRepository(UserEntity::class)->find($assigneeId);
-                    if ($user) {
+            if (!empty($assignees) && is_array($assignees)) {
+                foreach ($assignees as $assigneeId) {
+                    $assigneeUser = $this->entityManager->getRepository(UserEntity::class)->find($assigneeId);
+                    if ($assigneeUser) {
                         $assignee = new EventAssigneeEntity();
                         $assignee->setEvent($event);
-                        $assignee->setUser($user);
+                        $assignee->setUser($assigneeUser);
+                        $assignee->setAssignedBy($event->getCreatedBy()); // Set the creator as the assignedBy
                         $this->entityManager->persist($assignee);
                     }
                 }
@@ -93,22 +151,22 @@ class EventService
             }
             
             // Process time slots if provided
-            if (!empty($data['time_slots']) && is_array($data['time_slots'])) {
-                foreach ($data['time_slots'] as $slotData) {
+            if (!empty($timeSlots) && is_array($timeSlots)) {
+                foreach ($timeSlots as $slotData) {
                     $this->addTimeSlot($event, $slotData);
                 }
             }
             
             // Process form fields if provided
-            if (!empty($data['form_fields']) && is_array($data['form_fields'])) {
-                foreach ($data['form_fields'] as $fieldData) {
+            if (!empty($formFields) && is_array($formFields)) {
+                foreach ($formFields as $fieldData) {
                     $this->addFormField($event, $fieldData);
                 }
             }
             
             // Process booking options if provided
-            if (!empty($data['booking_options']) && is_array($data['booking_options'])) {
-                foreach ($data['booking_options'] as $optionData) {
+            if (!empty($bookingOptions) && is_array($bookingOptions)) {
+                foreach ($bookingOptions as $optionData) {
                     $this->addBookingOption($event, $optionData);
                 }
             }
@@ -122,11 +180,41 @@ class EventService
     public function update(EventEntity $event, array $data): void
     {
         try {
+            $assignees = $data['assignees'] ?? null;
+            $timeSlots = $data['time_slots'] ?? null;
+            $formFields = $data['form_fields'] ?? null;
+            $bookingOptions = $data['booking_options'] ?? null;
+            
+            // Remove nested data from validation
+            unset($data['assignees']);
+            unset($data['time_slots']);
+            unset($data['form_fields']);
+            unset($data['booking_options']);
+            unset($data['team']); // Remove 'team' if it exists
+            
+            // Handle slug updates
+            if (!empty($data['slug']) || (!isset($data['slug']) && !empty($data['name']))) {
+                if (empty($data['slug']) && !empty($data['name'])) {
+                    $data['slug'] = $data['name'];
+                }
+                
+                $data['slug'] = $this->slugService->generateSlug($data['slug']);
+            }
+            
             $constraints = [
                 'name' => new Assert\Optional([
                     new Assert\NotBlank(['message' => 'Event name is required.']),
                     new Assert\Type('string'),
                     new Assert\Length(['min' => 2, 'max' => 255]),
+                ]),
+                'slug' => new Assert\Optional([
+                    new Assert\NotBlank(['message' => 'Event slug is required.']),
+                    new Assert\Type('string'),
+                    new Assert\Length(['min' => 2, 'max' => 255]),
+                    new Assert\Regex([
+                        'pattern' => '/^[a-z0-9\-]+$/',
+                        'message' => 'Slug can only contain lowercase letters, numbers, and hyphens.'
+                    ]),
                 ]),
                 'description' => new Assert\Optional([
                     new Assert\Type('string'),
@@ -134,9 +222,16 @@ class EventService
                 'team_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
                 ]),
+                'duration' => new Assert\Optional([
+                    new Assert\Type('integer'),
+                    new Assert\Range(['min' => 15, 'max' => 1440]) 
+                ]),
             ];
             
             $transform = [
+                'slug' => function(string $value) {
+                    return $this->slugService->generateSlug($value);
+                },
                 'team_id' => function($value) {
                     if ($value) {
                         $team = $this->entityManager->getRepository(TeamEntity::class)->find($value);
@@ -152,32 +247,55 @@ class EventService
             $this->crudManager->update($event, $data, $constraints, $transform);
             
             // Update assignees if provided
-            if (isset($data['assignees']) && is_array($data['assignees'])) {
-                // Remove existing assignees
+            if ($assignees !== null && is_array($assignees)) {
+                // Get existing assignees
                 $existingAssignees = $this->entityManager->getRepository(EventAssigneeEntity::class)
                     ->findBy(['event' => $event]);
-                    
+                
+                // Create a map of existing user IDs for quick lookup
+                $existingUserIds = [];
                 foreach ($existingAssignees as $existingAssignee) {
-                    $this->entityManager->remove($existingAssignee);
+                    $existingUserIds[$existingAssignee->getUser()->getId()] = $existingAssignee;
                 }
                 
-                // Add new assignees
-                foreach ($data['assignees'] as $assigneeId) {
+                // Determine which users to remove and which to add
+                $userIdsToKeep = [];
+                
+                // Process new assignees
+                foreach ($assignees as $assigneeId) {
+                    $userIdsToKeep[] = $assigneeId;
+                    
+                    // Skip if already assigned
+                    if (isset($existingUserIds[$assigneeId])) {
+                        continue;
+                    }
+                    
+                    // Add new assignee
                     $user = $this->entityManager->getRepository(UserEntity::class)->find($assigneeId);
                     if ($user) {
                         $assignee = new EventAssigneeEntity();
                         $assignee->setEvent($event);
                         $assignee->setUser($user);
+                        $assignee->setAssignedBy($event->getCreatedBy());
                         $this->entityManager->persist($assignee);
                     }
                 }
+                
+                // Remove assignees that aren't in the new list
+                foreach ($existingAssignees as $existingAssignee) {
+                    $userId = $existingAssignee->getUser()->getId();
+                    if (!in_array($userId, $userIdsToKeep)) {
+                        $this->entityManager->remove($existingAssignee);
+                    }
+                }
+                
                 $this->entityManager->flush();
             }
             
             // Update time slots if provided
-            if (isset($data['time_slots']) && is_array($data['time_slots'])) {
+            if ($timeSlots !== null && is_array($timeSlots)) {
                 // Remove existing time slots
-                $existingSlots = $this->entityManager->getRepository(EventTimeSlotEntity::class)
+                $existingSlots = $this->entityManager->getRepository(EventScheduleEntity::class)
                     ->findBy(['event' => $event]);
                     
                 foreach ($existingSlots as $existingSlot) {
@@ -186,13 +304,13 @@ class EventService
                 $this->entityManager->flush();
                 
                 // Add new time slots
-                foreach ($data['time_slots'] as $slotData) {
+                foreach ($timeSlots as $slotData) {
                     $this->addTimeSlot($event, $slotData);
                 }
             }
             
             // Update form fields if provided
-            if (isset($data['form_fields']) && is_array($data['form_fields'])) {
+            if ($formFields !== null && is_array($formFields)) {
                 // Remove existing form fields
                 $existingFields = $this->entityManager->getRepository(EventFormFieldEntity::class)
                     ->findBy(['event' => $event]);
@@ -203,13 +321,13 @@ class EventService
                 $this->entityManager->flush();
                 
                 // Add new form fields
-                foreach ($data['form_fields'] as $fieldData) {
+                foreach ($formFields as $fieldData) {
                     $this->addFormField($event, $fieldData);
                 }
             }
             
             // Update booking options if provided
-            if (isset($data['booking_options']) && is_array($data['booking_options'])) {
+            if ($bookingOptions !== null && is_array($bookingOptions)) {
                 // Remove existing booking options
                 $existingOptions = $this->entityManager->getRepository(EventBookingOptionEntity::class)
                     ->findBy(['event' => $event]);
@@ -220,7 +338,7 @@ class EventService
                 $this->entityManager->flush();
                 
                 // Add new booking options
-                foreach ($data['booking_options'] as $optionData) {
+                foreach ($bookingOptions as $optionData) {
                     $this->addBookingOption($event, $optionData);
                 }
             }
@@ -228,6 +346,8 @@ class EventService
             throw new EventsException($e->getMessage());
         }
     }
+
+
 
     public function delete(EventEntity $event, bool $hard = false): void
     {
@@ -266,6 +386,23 @@ class EventService
         return $this->getOne($id, ['team' => $team]);
     }
     
+    public function getEventBySlug(string $slug, ?TeamEntity $team, OrganizationEntity $organization): ?EventEntity
+    {
+        $criteria = [
+            'slug' => $slug,
+            'deleted' => false
+        ];
+        
+        if ($team) {
+            $criteria['team'] = $team;
+        } else {
+            $criteria['organization'] = $organization;
+            $criteria['team'] = null;
+        }
+        
+        return $this->entityManager->getRepository(EventEntity::class)->findOneBy($criteria);
+    }
+    
     public function getAssignees(EventEntity $event): array
     {
         return $this->entityManager->getRepository(EventAssigneeEntity::class)
@@ -274,7 +411,7 @@ class EventService
     
     public function getTimeSlots(EventEntity $event): array
     {
-        return $this->entityManager->getRepository(EventTimeSlotEntity::class)
+        return $this->entityManager->getRepository(EventScheduleEntity::class)
             ->findBy(['event' => $event], ['startTime' => 'ASC']);
     }
     
@@ -290,7 +427,7 @@ class EventService
             ->findBy(['event' => $event, 'active' => true]);
     }
     
-    private function addTimeSlot(EventEntity $event, array $data): EventTimeSlotEntity
+    private function addTimeSlot(EventEntity $event, array $data): EventScheduleEntity
     {
         try {
             if (empty($data['start_time']) || empty($data['end_time'])) {
@@ -309,7 +446,7 @@ class EventService
                 throw new EventsException('End time must be after start time');
             }
             
-            $timeSlot = new EventTimeSlotEntity();
+            $timeSlot = new EventScheduleEntity();
             $timeSlot->setEvent($event);
             $timeSlot->setStartTime($startTime);
             $timeSlot->setEndTime($endTime);

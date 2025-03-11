@@ -7,6 +7,7 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpFoundation\Request;
 use App\Service\ResponseService;
+use App\Plugins\Events\Service\EventService;
 use App\Plugins\Account\Service\LoginService;
 use App\Plugins\Account\Service\UserService;
 use App\Plugins\Teams\Service\TeamService;
@@ -19,17 +20,20 @@ class MainController extends AbstractController
     private LoginService $loginService;
     private UserService $userService;
     private TeamService $teamService;
+    private EventService $eventService;
 
     public function __construct(
         ResponseService $responseService,
         LoginService $loginService,
         UserService $userService,
-        TeamService $teamService
+        TeamService $teamService,
+        EventService $eventService
     ) {
         $this->responseService = $responseService;
         $this->loginService = $loginService;
         $this->userService = $userService;
         $this->teamService = $teamService;
+        $this->eventService = $eventService;
     }
 
     #[Route('/login', name: 'account_login', methods: ['POST'])]
@@ -58,11 +62,47 @@ class MainController extends AbstractController
 
         // Process organizations
         foreach ($organizations as $organization) {
-            $organization->entity = $organization->entity->toArray();
+            $organizationEntity = $organization->entity;
+            $organization->entity = $organizationEntity->toArray();
+            
+            // Add events for this organization (events without a team)
+            $orgEvents = $this->eventService->getMany([], 1, 1000, [
+                'organization' => $organizationEntity,
+                'deleted' => false
+            ]);
+            
+            // Filter to only include events without a team
+            $orgEventsWithoutTeam = array_filter($orgEvents, function($event) {
+                return $event->getTeam() === null;
+            });
+            
+            $organization->entity['events'] = array_map(function($event) {
+                return $event->toArray();
+            }, $orgEventsWithoutTeam);
         }
 
         // Process and expand teams with all accessible teams
         $allTeams = $this->getAllAccessibleTeams($directTeams, $organizations);
+        
+        // Add events to each team
+        foreach ($allTeams as $team) {
+            if (is_object($team->entity) && !is_array($team->entity)) {
+                $teamId = $team->entity->getId();
+                $team->entity = $team->entity->toArray();
+            } else {
+                $teamId = $team->entity['id'];
+            }
+            
+            // Get events for this team
+            $teamEvents = $this->eventService->getMany([], 1, 1000, [
+                'team' => $teamId,
+                'deleted' => false
+            ]);
+            
+            $team->entity['events'] = array_map(function($event) {
+                return $event->toArray();
+            }, $teamEvents);
+        }
 
         return $this->responseService->json(true, 'retrieve', $user->toArray() + [
             'organizations' => $organizations,

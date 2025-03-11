@@ -84,13 +84,17 @@ class TeamService
                     new Assert\Type('scalar'),
                     new Assert\Length(['min' => 2, 'max' => 255]),
                 ],
-                'parent_team_id' => [
-                    new Assert\Type('scalar')
-                ],
+                'parent_team_id' => new Assert\Optional([
+                    new Assert\Type('numeric')
+                ]),
+                'color' => new Assert\Optional([
+                    new Assert\Type('scalar'),
+                    new Assert\Length(['min' => 2, 'max' => 30]),
+                ])
                 
             ];
 
-            $this->crudManager->create($team, array_intersect_key($data, array_flip(['name', 'slug', 'parent_team_id'])), $contraints);
+            $this->crudManager->create($team, array_intersect_key($data, array_flip(['name', 'slug', 'parent_team_id', 'color'])), $contraints);
 
             $this->update($team, $data);
 
@@ -119,6 +123,10 @@ class TeamService
             'parent_team_id' => new Assert\Optional([
                 new Assert\Type('numeric'),
             ]),
+            'color' => new Assert\Optional([
+                new Assert\Type('scalar'),
+                new Assert\Length(['min' => 2, 'max' => 30]),
+            ])
         ];
 
         $transform = [

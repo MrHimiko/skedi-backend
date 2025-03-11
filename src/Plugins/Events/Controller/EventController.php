@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Plugins\Events\Controller;
 
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -12,7 +11,7 @@ use App\Plugins\Events\Exception\EventsException;
 use App\Plugins\Organizations\Service\UserOrganizationService;
 use App\Plugins\Teams\Service\TeamService;
 
-#[Route('/api/organizations/{organization_id}', requirements: ['organization_id' => '\d+'])]
+#[Route('/api')]
 class EventController extends AbstractController
 {
     private ResponseService $responseService;
@@ -33,14 +32,20 @@ class EventController extends AbstractController
     }
 
     #[Route('/events', name: 'events_get_many#', methods: ['GET'])]
-    public function getEvents(int $organization_id, Request $request): JsonResponse
+    public function getEvents(Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
         $filters = $request->attributes->get('filters');
         $page = $request->attributes->get('page');
         $limit = $request->attributes->get('limit');
+        $organization_id = $request->query->get('organization_id');
 
         try {
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+
             // Check if user has access to this organization
             if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
                 return $this->responseService->json(false, 'Organization was not found.');
@@ -50,7 +55,7 @@ class EventController extends AbstractController
             $events = $this->eventService->getMany($filters, $page, $limit, [
                 'organization' => $organization->entity
             ]);
-
+            
             $result = [];
             foreach ($events as $event) {
                 $eventData = $event->toArray();
@@ -85,11 +90,17 @@ class EventController extends AbstractController
     }
 
     #[Route('/events/{id}', name: 'events_get_one#', methods: ['GET'], requirements: ['id' => '\d+'])]
-    public function getEventById(int $organization_id, int $id, Request $request): JsonResponse
+    public function getEventById(int $id, Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
+        $organization_id = $request->query->get('organization_id');
         
         try {
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
             // Check if user has access to this organization
             if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
                 return $this->responseService->json(false, 'Organization was not found.');
@@ -125,7 +136,7 @@ class EventController extends AbstractController
             $eventData['assignees'] = array_map(function($assignee) {
                 return $assignee->toArray();
             }, $assignees);
-
+            
             return $this->responseService->json(true, 'Event retrieved successfully.', $eventData);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
@@ -135,18 +146,31 @@ class EventController extends AbstractController
     }
 
     #[Route('/events', name: 'events_create#', methods: ['POST'])]
-    public function createEvent(int $organization_id, Request $request): JsonResponse
+    public function createEvent(Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
         $data = $request->attributes->get('data');
-
+        $organization_id = $data['organization_id'] ?? $request->query->get('organization_id');
+        
         try {
+            if ($request->query->has('organization_id')) {
+                $data['organization_id'] = (int)$request->query->get('organization_id');
+            }
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
             // Check if user has access to this organization
             if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
                 return $this->responseService->json(false, 'Organization was not found.');
             }
-            
-            // Check team access if team_id is provided
+      
+            if (!isset($data['duration'])) {
+                $data['duration'] = 30; 
+            }
+                
+            // Rest of your existing code
             if (!empty($data['team_id'])) {
                 $team = $this->teamService->getTeamByIdAndOrganization($data['team_id'], $organization->entity);
                 if (!$team) {
@@ -168,6 +192,7 @@ class EventController extends AbstractController
                 }
             });
             
+            // Rest of the code remains the same
             $eventData = $event->toArray();
             
             // Add time slots, form fields, booking options, and assignees to response
@@ -190,7 +215,7 @@ class EventController extends AbstractController
             $eventData['assignees'] = array_map(function($assignee) {
                 return $assignee->toArray();
             }, $assignees);
-
+            
             return $this->responseService->json(true, 'Event created successfully.', $eventData, 201);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
@@ -200,12 +225,22 @@ class EventController extends AbstractController
     }
 
     #[Route('/events/{id}', name: 'events_update#', methods: ['PUT'], requirements: ['id' => '\d+'])]
-    public function updateEvent(int $organization_id, int $id, Request $request): JsonResponse
+    public function updateEvent(int $id, Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
         $data = $request->attributes->get('data');
-
+        $organization_id = $data['organization_id'] ?? $request->query->get('organization_id');
+        
         try {
+            // Check if organization_id is provided
+           
+            if ($request->query->has('organization_id')) {
+                $data['organization_id'] = (int)$request->query->get('organization_id');
+            }
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
             // Check if user has access to this organization
             if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
                 return $this->responseService->json(false, 'Organization was not found.');
@@ -216,7 +251,7 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Event was not found.');
             }
             
-            // Check team access if team_id is being updated
+            // Rest of your existing code
             if (!empty($data['team_id'])) {
                 $team = $this->teamService->getTeamByIdAndOrganization($data['team_id'], $organization->entity);
                 if (!$team) {
@@ -249,7 +284,7 @@ class EventController extends AbstractController
             $eventData['assignees'] = array_map(function($assignee) {
                 return $assignee->toArray();
             }, $assignees);
-
+            
             return $this->responseService->json(true, 'Event updated successfully.', $eventData);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
@@ -259,11 +294,17 @@ class EventController extends AbstractController
     }
 
     #[Route('/events/{id}', name: 'events_delete#', methods: ['DELETE'], requirements: ['id' => '\d+'])]
-    public function deleteEvent(int $organization_id, int $id, Request $request): JsonResponse
+    public function deleteEvent(int $id, Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
-
+        $organization_id = $request->query->get('organization_id');
+        
         try {
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
             // Check if user has access to this organization
             if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
                 return $this->responseService->json(false, 'Organization was not found.');
@@ -275,7 +316,6 @@ class EventController extends AbstractController
             }
             
             $this->eventService->delete($event);
-
             return $this->responseService->json(true, 'Event deleted successfully.');
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);

@@ -34,6 +34,10 @@ class TeamEntity
     #[ORM\Column(name: "deleted", type: "boolean", options: ["default" => false])]
     private bool $deleted = false;
 
+    #[ORM\Column(name: "color", type: "string", length: 50, options: ["default" => "#FFDE0E"])]
+    private string $color = "#FFDE0E";
+
+
     #[ORM\Column(name: "updated", type: "datetime", nullable: false, options: ["default" => "CURRENT_TIMESTAMP"])]
     private DateTimeInterface $updated;
 
@@ -63,6 +67,18 @@ class TeamEntity
         $this->name = $name;
         return $this;
     }
+
+    public function getColor(): string
+    {
+        return $this->color;
+    }
+
+    public function setColor(string $color): self
+    {
+        $this->color = $color;
+        return $this;
+    }
+
 
     public function isDeleted(): bool
     {
@@ -135,6 +151,7 @@ class TeamEntity
             'id'              => $this->getId(),
             'name'            => $this->getName(),
             'slug'            => $this->getSlug(),
+            'color'           => $this->getColor(),
             'organization_id' => $this->getOrganization()->getId(),
             'deleted'         => $this->isDeleted(),
             'updated'         => $this->getUpdated()->format('Y-m-d H:i:s'),

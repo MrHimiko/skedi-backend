@@ -11,7 +11,7 @@ use App\Plugins\Events\Entity\EventEntity;
 use App\Plugins\Events\Entity\EventBookingEntity;
 use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventGuestEntity;
-use App\Plugins\Events\Entity\EventTimeSlotEntity;
+use App\Plugins\Events\Entity\EventScheduleEntity;
 use App\Plugins\Events\Entity\ContactEntity;
 use App\Plugins\Events\Exception\EventsException;
 use DateTime;
@@ -305,82 +305,5 @@ class EventBookingService
         }
     }
     
-    private function validateTimeSlotAvailability(EventEntity $event, \DateTimeInterface $startTime, \DateTimeInterface $endTime, ?int $excludeBookingId = null): void
-    {
-        // 1. Check if the time is during an available slot (not in a break)
-        $isWithinAvailableSlot = false;
-        $timeSlots = $this->entityManager->getRepository(EventTimeSlotEntity::class)
-            ->findBy(['event' => $event], ['startTime' => 'ASC']);
-            
-        if (empty($timeSlots)) {
-            throw new EventsException('No time slots defined for this event');
-        }
-        
-        foreach ($timeSlots as $slot) {
-            // Skip break slots
-            if ($slot->isBreak()) {
-                // Check if requested time overlaps with a break
-                if (
-                    ($startTime >= $slot->getStartTime() && $startTime < $slot->getEndTime()) ||
-                    ($endTime > $slot->getStartTime() && $endTime <= $slot->getEndTime()) ||
-                    ($startTime <= $slot->getStartTime() && $endTime >= $slot->getEndTime())
-                ) {
-                    throw new EventsException('The selected time overlaps with a break period');
-                }
-                continue;
-            }
-            
-            // Check if time is within a non-break slot
-            if ($startTime >= $slot->getStartTime() && $endTime <= $slot->getEndTime()) {
-                $isWithinAvailableSlot = true;
-                break;
-            }
-        }
-        
-        if (!$isWithinAvailableSlot) {
-            throw new EventsException('The selected time is not within any available time slot');
-        }
-        
-        // 2. Check for overlapping bookings
-        $qb = $this->entityManager->createQueryBuilder();
-        $qb->select('b')
-           ->from(EventBookingEntity::class, 'b')
-           ->where('b.event = :event')
-           ->andWhere('b.cancelled = :cancelled')
-           ->andWhere(
-               $qb->expr()->orX(
-                   // New booking starts during an existing booking
-                   $qb->expr()->andX(
-                       $qb->expr()->gte('b.startTime', ':start'),
-                       $qb->expr()->lt('b.startTime', ':end')
-                   ),
-                   // New booking ends during an existing booking
-                   $qb->expr()->andX(
-                       $qb->expr()->gt('b.endTime', ':start'),
-                       $qb->expr()->lte('b.endTime', ':end')
-                   ),
-                   // New booking completely contains an existing booking
-                   $qb->expr()->andX(
-                       $qb->expr()->lte('b.startTime', ':start'),
-                       $qb->expr()->gte('b.endTime', ':end')
-                   )
-               )
-           )
-           ->setParameter('event', $event)
-           ->setParameter('cancelled', false)
-           ->setParameter('start', $startTime)
-           ->setParameter('end', $endTime);
-        
-        // Exclude the current booking if we're updating
-        if ($excludeBookingId) {
-            $qb->andWhere('b.id != :excludeId')
-               ->setParameter('excludeId', $excludeBookingId);
-        }
-        
-        $overlappingBookings = $qb->getQuery()->getResult();
-        
-        if (!empty($overlappingBookings)) {
-            throw new EventsException('The selected time slot overlaps with an existing booking');
-        }
-    }
+    
 }

@@ -109,6 +109,11 @@ class TeamController extends AbstractController
             if($organization->role !== 'admin') {
                 return $this->responseService->json(false, 'You do not have permission to create teams in this organization.');
             }
+
+            // Get the parent_id from query parameter if it exists
+            if ($request->query->has('parent_team_id')) {
+                $data['parent_team_id'] = $request->query->get('parent_team_id');
+            }
             
             
             // Create team with organization set in callback
