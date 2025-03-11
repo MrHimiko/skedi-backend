@@ -11,7 +11,6 @@ use App\Plugins\Events\Entity\EventEntity;
 use App\Plugins\Events\Entity\EventBookingEntity;
 use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventGuestEntity;
-use App\Plugins\Events\Entity\EventScheduleEntity;
 use App\Plugins\Events\Entity\ContactEntity;
 use App\Plugins\Events\Exception\EventsException;
 use DateTime;
@@ -21,15 +20,18 @@ class EventBookingService
     private CrudManager $crudManager;
     private EntityManagerInterface $entityManager;
     private ContactService $contactService;
+    private EventScheduleService $scheduleService;
 
     public function __construct(
         CrudManager $crudManager,
         EntityManagerInterface $entityManager,
-        ContactService $contactService
+        ContactService $contactService,
+        EventScheduleService $scheduleService
     ) {
         $this->crudManager = $crudManager;
         $this->entityManager = $entityManager;
         $this->contactService = $contactService;
+        $this->scheduleService = $scheduleService;
     }
 
     public function getMany(array $filters, int $page, int $limit, array $criteria = []): array
@@ -81,8 +83,10 @@ class EventBookingService
                 throw new EventsException('End time must be after start time');
             }
             
-            // Check if the slot is available (not in a break and not overlapping with existing bookings)
-            $this->validateTimeSlotAvailability($event, $startTime, $endTime);
+            // Check if the slot is available based on schedule and existing bookings
+            if (!$this->validateTimeSlotAvailability($event, $startTime, $endTime)) {
+                throw new EventsException('The selected time slot is not available');
+            }
             
             // Create the booking
             $booking = new EventBookingEntity();
@@ -147,7 +151,9 @@ class EventBookingService
                 
                 // Check if the new slot is available
                 if ($startTime != $booking->getStartTime() || $endTime != $booking->getEndTime()) {
-                    $this->validateTimeSlotAvailability($booking->getEvent(), $startTime, $endTime, $booking->getId());
+                    if (!$this->validateTimeSlotAvailability($booking->getEvent(), $startTime, $endTime, $booking->getId())) {
+                        throw new EventsException('The selected time slot is not available');
+                    }
                     $booking->setStartTime($startTime);
                     $booking->setEndTime($endTime);
                     $timeUpdated = true;
@@ -180,8 +186,13 @@ class EventBookingService
             // Update guests if provided
             if (!empty($data['guests']) && is_array($data['guests'])) {
                 // Remove existing guests
-                $existingGuests = $this->entityManager->getRepository(EventGuestEntity::class)
-                    ->findBy(['booking' => $booking]);
+                $existingGuests = $this->crudManager->findMany(
+                    EventGuestEntity::class,
+                    [],
+                    1,
+                    1000,
+                    ['booking' => $booking]
+                );
                     
                 foreach ($existingGuests as $existingGuest) {
                     $this->entityManager->remove($existingGuest);
@@ -215,8 +226,13 @@ class EventBookingService
     {
         try {
             // Remove related guests first
-            $guests = $this->entityManager->getRepository(EventGuestEntity::class)
-                ->findBy(['booking' => $booking]);
+            $guests = $this->crudManager->findMany(
+                EventGuestEntity::class,
+                [],
+                1,
+                1000,
+                ['booking' => $booking]
+            );
                 
             foreach ($guests as $guest) {
                 $this->entityManager->remove($guest);
@@ -226,6 +242,58 @@ class EventBookingService
             $this->entityManager->remove($booking);
             $this->entityManager->flush();
         } catch (\Exception $e) {
+            throw new EventsException($e->getMessage());
+        }
+    }
+    
+    /**
+     * Check if a time slot is available based on schedule and existing bookings
+     */
+    private function validateTimeSlotAvailability(EventEntity $event, \DateTimeInterface $startTime, \DateTimeInterface $endTime, ?int $excludeBookingId = null): bool
+    {
+        // First, check if the time slot fits within the schedule
+        if (!$this->scheduleService->isTimeSlotAvailable($event, $startTime, $endTime)) {
+            return false;
+        }
+        
+        // Then, check for overlapping bookings
+        try {
+            $criteria = [
+                'event' => $event,
+                'cancelled' => false
+            ];
+            
+            $bookings = $this->crudManager->findMany(
+                EventBookingEntity::class,
+                [],
+                1,
+                1000,
+                $criteria
+            );
+            
+            // Filter bookings to find overlaps
+            $overlappingBookings = array_filter($bookings, function(EventBookingEntity $booking) use ($startTime, $endTime, $excludeBookingId) {
+                // Skip the booking being updated
+                if ($excludeBookingId && $booking->getId() === $excludeBookingId) {
+                    return false;
+                }
+                
+                $bookingStart = $booking->getStartTime();
+                $bookingEnd = $booking->getEndTime();
+                
+                // Check for overlap
+                return (
+                    // Booking starts during another booking
+                    ($startTime >= $bookingStart && $startTime < $bookingEnd) ||
+                    // Booking ends during another booking
+                    ($endTime > $bookingStart && $endTime <= $bookingEnd) ||
+                    // Booking completely contains another booking
+                    ($startTime <= $bookingStart && $endTime >= $bookingEnd)
+                );
+            });
+            
+            return count($overlappingBookings) === 0;
+        } catch (CrudException $e) {
             throw new EventsException($e->getMessage());
         }
     }
@@ -244,31 +312,45 @@ class EventBookingService
     public function getBookingsByDateRange(EventEntity $event, \DateTimeInterface $startDate, \DateTimeInterface $endDate, bool $includeCancelled = false): array
     {
         try {
-            $qb = $this->entityManager->createQueryBuilder();
-            $qb->select('b')
-               ->from(EventBookingEntity::class, 'b')
-               ->where('b.event = :event')
-               ->andWhere('b.startTime >= :startDate')
-               ->andWhere('b.startTime <= :endDate')
-               ->setParameter('event', $event)
-               ->setParameter('startDate', $startDate)
-               ->setParameter('endDate', $endDate);
-               
+            $criteria = [
+                'event' => $event
+            ];
+            
             if (!$includeCancelled) {
-                $qb->andWhere('b.cancelled = :cancelled')
-                   ->setParameter('cancelled', false);
+                $criteria['cancelled'] = false;
             }
             
-            return $qb->getQuery()->getResult();
-        } catch (\Exception $e) {
+            $bookings = $this->crudManager->findMany(
+                EventBookingEntity::class,
+                [],
+                1,
+                1000,
+                $criteria
+            );
+            
+            // Filter bookings within date range
+            return array_filter($bookings, function(EventBookingEntity $booking) use ($startDate, $endDate) {
+                $bookingDate = $booking->getStartTime();
+                return $bookingDate >= $startDate && $bookingDate <= $endDate;
+            });
+        } catch (CrudException $e) {
             throw new EventsException($e->getMessage());
         }
     }
     
     public function getGuests(EventBookingEntity $booking): array
     {
-        return $this->entityManager->getRepository(EventGuestEntity::class)
-            ->findBy(['booking' => $booking]);
+        try {
+            return $this->crudManager->findMany(
+                EventGuestEntity::class,
+                [],
+                1,
+                1000,
+                ['booking' => $booking]
+            );
+        } catch (CrudException $e) {
+            throw new EventsException($e->getMessage());
+        }
     }
     
     private function addGuest(EventBookingEntity $booking, array $guestData): EventGuestEntity
@@ -304,6 +386,4 @@ class EventBookingService
             throw new EventsException($e->getMessage());
         }
     }
-    
-    
 }

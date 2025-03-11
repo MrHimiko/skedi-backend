@@ -7,6 +7,7 @@ use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Component\HttpFoundation\Request;
 use App\Service\ResponseService;
 use App\Plugins\Events\Service\EventService;
+use App\Plugins\Events\Service\EventScheduleService;
 use App\Plugins\Events\Exception\EventsException;
 use App\Plugins\Organizations\Service\UserOrganizationService;
 use App\Plugins\Teams\Service\TeamService;
@@ -16,17 +17,20 @@ class EventController extends AbstractController
 {
     private ResponseService $responseService;
     private EventService $eventService;
+    private EventScheduleService $scheduleService;
     private UserOrganizationService $userOrganizationService;
     private TeamService $teamService;
 
     public function __construct(
         ResponseService $responseService,
         EventService $eventService,
+        EventScheduleService $scheduleService,
         UserOrganizationService $userOrganizationService,
         TeamService $teamService
     ) {
         $this->responseService = $responseService;
         $this->eventService = $eventService;
+        $this->scheduleService = $scheduleService;
         $this->userOrganizationService = $userOrganizationService;
         $this->teamService = $teamService;
     }
@@ -60,11 +64,11 @@ class EventController extends AbstractController
             foreach ($events as $event) {
                 $eventData = $event->toArray();
                 
-                // Add time slots
-                $timeSlots = $this->eventService->getTimeSlots($event);
-                $eventData['time_slots'] = array_map(function($slot) {
-                    return $slot->toArray();
-                }, $timeSlots);
+                // Add schedules and breaks
+                $schedules = $this->scheduleService->getSchedulesForEvent($event);
+                $eventData['schedules'] = array_map(function($schedule) {
+                    return $schedule->toArray();
+                }, $schedules);
                 
                 // Add booking options
                 $bookingOptions = $this->eventService->getBookingOptions($event);
@@ -113,11 +117,11 @@ class EventController extends AbstractController
             
             $eventData = $event->toArray();
             
-            // Add time slots
-            $timeSlots = $this->eventService->getTimeSlots($event);
-            $eventData['time_slots'] = array_map(function($slot) {
-                return $slot->toArray();
-            }, $timeSlots);
+            // Add schedules and breaks
+            $schedules = $this->scheduleService->getSchedulesForEvent($event);
+            $eventData['schedules'] = array_map(function($schedule) {
+                return $schedule->toArray();
+            }, $schedules);
             
             // Add form fields
             $formFields = $this->eventService->getFormFields($event);
@@ -170,7 +174,11 @@ class EventController extends AbstractController
                 $data['duration'] = 30; 
             }
                 
-            // Rest of your existing code
+            // Get schedules from request data
+            $schedulesData = $data['schedules'] ?? [];
+            unset($data['schedules']);
+            
+            // Check team if provided
             if (!empty($data['team_id'])) {
                 $team = $this->teamService->getTeamByIdAndOrganization($data['team_id'], $organization->entity);
                 if (!$team) {
@@ -192,25 +200,33 @@ class EventController extends AbstractController
                 }
             });
             
-            // Rest of the code remains the same
+            // Create schedules if provided
+            if (!empty($schedulesData)) {
+                $this->scheduleService->updateEventSchedules($event, $schedulesData);
+            }
+            
+            // Prepare response
             $eventData = $event->toArray();
             
-            // Add time slots, form fields, booking options, and assignees to response
-            $timeSlots = $this->eventService->getTimeSlots($event);
-            $eventData['time_slots'] = array_map(function($slot) {
-                return $slot->toArray();
-            }, $timeSlots);
+            // Add schedules to response
+            $schedules = $this->scheduleService->getSchedulesForEvent($event);
+            $eventData['schedules'] = array_map(function($schedule) {
+                return $schedule->toArray();
+            }, $schedules);
             
+            // Add form fields
             $formFields = $this->eventService->getFormFields($event);
             $eventData['form_fields'] = array_map(function($field) {
                 return $field->toArray();
             }, $formFields);
             
+            // Add booking options
             $bookingOptions = $this->eventService->getBookingOptions($event);
             $eventData['booking_options'] = array_map(function($option) {
                 return $option->toArray();
             }, $bookingOptions);
             
+            // Add assignees
             $assignees = $this->eventService->getAssignees($event);
             $eventData['assignees'] = array_map(function($assignee) {
                 return $assignee->toArray();
@@ -233,7 +249,6 @@ class EventController extends AbstractController
         
         try {
             // Check if organization_id is provided
-           
             if ($request->query->has('organization_id')) {
                 $data['organization_id'] = (int)$request->query->get('organization_id');
             }
@@ -251,7 +266,11 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Event was not found.');
             }
             
-            // Rest of your existing code
+            // Get schedules from request data
+            $schedulesData = $data['schedules'] ?? null;
+            unset($data['schedules']);
+            
+            // Check team if provided
             if (!empty($data['team_id'])) {
                 $team = $this->teamService->getTeamByIdAndOrganization($data['team_id'], $organization->entity);
                 if (!$team) {
@@ -260,26 +279,36 @@ class EventController extends AbstractController
                 $data['team'] = $team; // Set the actual team object
             }
             
+            // Update the event
             $this->eventService->update($event, $data);
             
+            // Update schedules if provided
+            if ($schedulesData !== null) {
+                $this->scheduleService->updateEventSchedules($event, $schedulesData);
+            }
+            
+            // Prepare response
             $eventData = $event->toArray();
             
-            // Add time slots, form fields, booking options, and assignees to response
-            $timeSlots = $this->eventService->getTimeSlots($event);
-            $eventData['time_slots'] = array_map(function($slot) {
-                return $slot->toArray();
-            }, $timeSlots);
+            // Add schedules to response
+            $schedules = $this->scheduleService->getSchedulesForEvent($event);
+            $eventData['schedules'] = array_map(function($schedule) {
+                return $schedule->toArray();
+            }, $schedules);
             
+            // Add form fields
             $formFields = $this->eventService->getFormFields($event);
             $eventData['form_fields'] = array_map(function($field) {
                 return $field->toArray();
             }, $formFields);
             
+            // Add booking options
             $bookingOptions = $this->eventService->getBookingOptions($event);
             $eventData['booking_options'] = array_map(function($option) {
                 return $option->toArray();
             }, $bookingOptions);
             
+            // Add assignees
             $assignees = $this->eventService->getAssignees($event);
             $eventData['assignees'] = array_map(function($assignee) {
                 return $assignee->toArray();
@@ -317,6 +346,47 @@ class EventController extends AbstractController
             
             $this->eventService->delete($event);
             return $this->responseService->json(true, 'Event deleted successfully.');
+        } catch (EventsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, $e, null, 500);
+        }
+    }
+    
+    #[Route('/events/{id}/available-slots', name: 'events_available_slots#', methods: ['GET'], requirements: ['id' => '\d+'])]
+    public function getAvailableSlots(int $id, Request $request): JsonResponse
+    {
+        $user = $request->attributes->get('user');
+        $organization_id = $request->query->get('organization_id');
+        $date = $request->query->get('date');
+        $duration = (int)$request->query->get('duration', 30);
+        
+        try {
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
+            // Check if date is provided
+            if (!$date) {
+                return $this->responseService->json(false, 'Date is required.');
+            }
+            
+            // Check if user has access to this organization
+            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
+                return $this->responseService->json(false, 'Organization was not found.');
+            }
+            
+            // Get event by ID ensuring it belongs to the organization
+            if (!$event = $this->eventService->getEventByIdAndOrganization($id, $organization->entity)) {
+                return $this->responseService->json(false, 'Event was not found.');
+            }
+            
+            // Get available slots
+            $dateObj = new \DateTime($date);
+            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $duration);
+            
+            return $this->responseService->json(true, 'Available slots retrieved successfully.', $slots);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {

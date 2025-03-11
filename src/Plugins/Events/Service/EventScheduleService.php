@@ -2,218 +2,360 @@
 
 namespace App\Plugins\Events\Service;
 
-use App\Service\CrudManager;
 use Doctrine\ORM\EntityManagerInterface;
 use App\Plugins\Events\Entity\EventEntity;
-use App\Plugins\Events\Entity\EventScheduleEntity;
-use App\Plugins\Events\Repository\EventScheduleRepository;
 use App\Plugins\Events\Exception\EventsException;
+use DateTimeInterface;
+use DateTime;
 
 class EventScheduleService
 {
-    private CrudManager $crudManager;
     private EntityManagerInterface $entityManager;
-    private EventScheduleRepository $scheduleRepository;
 
     public function __construct(
-        CrudManager $crudManager,
-        EntityManagerInterface $entityManager,
-        EventScheduleRepository $scheduleRepository
+        EntityManagerInterface $entityManager
     ) {
-        $this->crudManager = $crudManager;
         $this->entityManager = $entityManager;
-        $this->scheduleRepository = $scheduleRepository;
     }
 
-    public function getScheduleForEvent(EventEntity $event): ?EventScheduleEntity
+    /**
+     * Get schedules for an event
+     */
+    public function getScheduleForEvent(EventEntity $event): array
     {
-        return $this->scheduleRepository->findOneBy(['event' => $event]);
+        $schedule = $event->getSchedule();
+        
+        // Return an empty default schedule if none exists
+        if (empty($schedule)) {
+            return [
+                'monday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'tuesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'wednesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'thursday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'friday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'saturday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'sunday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []]
+            ];
+        }
+        
+        return $schedule;
     }
 
-    public function createOrUpdateSchedule(EventEntity $event, array $scheduleData): EventScheduleEntity
+    /**
+     * Update schedule for an event
+     * 
+     * @param EventEntity $event
+     * @param array $scheduleData Format: [
+     *   'monday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 
+     *               'breaks' => [['start_time' => '12:00:00', 'end_time' => '13:00:00']]],
+     *   'tuesday' => ...
+     * ]
+     */
+    public function updateEventSchedule(EventEntity $event, array $scheduleData): array
     {
         try {
-            $existingSchedule = $this->getScheduleForEvent($event);
+            // Validate schedule data
+            $validatedSchedule = $this->validateAndSanitizeSchedule($scheduleData);
             
-            if ($existingSchedule) {
-                // Update existing schedule
-                $existingSchedule->setSchedule($scheduleData);
-                $this->entityManager->persist($existingSchedule);
-                $this->entityManager->flush();
-                
-                return $existingSchedule;
-            } else {
-                // Create new schedule
-                $schedule = new EventScheduleEntity();
-                $schedule->setEvent($event);
-                $schedule->setSchedule($scheduleData);
-                
-                $this->entityManager->persist($schedule);
-                $this->entityManager->flush();
-                
-                return $schedule;
-            }
+            // Update the event with new schedule
+            $event->setSchedule($validatedSchedule);
+            
+            $this->entityManager->persist($event);
+            $this->entityManager->flush();
+            
+            return $validatedSchedule;
         } catch (\Exception $e) {
-            throw new EventsException('Failed to create or update schedule: ' . $e->getMessage());
+            throw new EventsException('Failed to update event schedule: ' . $e->getMessage());
         }
     }
-
+    
+    /**
+     * Validate and sanitize schedule data
+     */
+    private function validateAndSanitizeSchedule(array $scheduleData): array
+    {
+        $validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        $validatedSchedule = [];
+        
+        // Create default schedule structure for all days first
+        foreach ($validDays as $day) {
+            $validatedSchedule[$day] = [
+                'enabled' => false,
+                'start_time' => '09:00:00',
+                'end_time' => '17:00:00',
+                'breaks' => []
+            ];
+        }
+        
+        // Override with provided data
+        foreach ($scheduleData as $day => $dayData) {
+            $day = strtolower($day);
+            
+            // Skip invalid days
+            if (!in_array($day, $validDays)) {
+                continue;
+            }
+            
+            // Validate required fields in day data
+            if (!is_array($dayData)) {
+                continue;
+            }
+            
+            // Set enabled status
+            if (isset($dayData['enabled'])) {
+                $validatedSchedule[$day]['enabled'] = (bool)$dayData['enabled'];
+            }
+            
+            // Validate and set start_time
+            if (!empty($dayData['start_time'])) {
+                try {
+                    // Validate time format
+                    $startTime = new DateTime($dayData['start_time']);
+                    $validatedSchedule[$day]['start_time'] = $startTime->format('H:i:s');
+                } catch (\Exception $e) {
+                    // Use default if invalid
+                }
+            }
+            
+            // Validate and set end_time
+            if (!empty($dayData['end_time'])) {
+                try {
+                    // Validate time format
+                    $endTime = new DateTime($dayData['end_time']);
+                    $validatedSchedule[$day]['end_time'] = $endTime->format('H:i:s');
+                } catch (\Exception $e) {
+                    // Use default if invalid
+                }
+            }
+            
+            // Make sure end time is after start time
+            $startTime = new DateTime($validatedSchedule[$day]['start_time']);
+            $endTime = new DateTime($validatedSchedule[$day]['end_time']);
+            
+            if ($startTime >= $endTime) {
+                // If times are invalid, reset to default
+                $validatedSchedule[$day]['start_time'] = '09:00:00';
+                $validatedSchedule[$day]['end_time'] = '17:00:00';
+            }
+            
+            // Process breaks
+            if (!empty($dayData['breaks']) && is_array($dayData['breaks'])) {
+                $validatedBreaks = [];
+                
+                foreach ($dayData['breaks'] as $breakData) {
+                    if (!is_array($breakData)) {
+                        continue;
+                    }
+                    
+                    $validBreak = [];
+                    
+                    // Validate break start time
+                    if (!empty($breakData['start_time'])) {
+                        try {
+                            $breakStartTime = new DateTime($breakData['start_time']);
+                            $validBreak['start_time'] = $breakStartTime->format('H:i:s');
+                        } catch (\Exception $e) {
+                            continue; // Skip invalid break
+                        }
+                    } else {
+                        continue; // Skip if no start time
+                    }
+                    
+                    // Validate break end time
+                    if (!empty($breakData['end_time'])) {
+                        try {
+                            $breakEndTime = new DateTime($breakData['end_time']);
+                            $validBreak['end_time'] = $breakEndTime->format('H:i:s');
+                        } catch (\Exception $e) {
+                            continue; // Skip invalid break
+                        }
+                    } else {
+                        continue; // Skip if no end time
+                    }
+                    
+                    // Make sure break end time is after break start time
+                    $breakStartTime = new DateTime($validBreak['start_time']);
+                    $breakEndTime = new DateTime($validBreak['end_time']);
+                    
+                    if ($breakStartTime >= $breakEndTime) {
+                        continue; // Skip invalid break
+                    }
+                    
+                    // Make sure break is within the day's time range
+                    $dayStartTime = new DateTime($validatedSchedule[$day]['start_time']);
+                    $dayEndTime = new DateTime($validatedSchedule[$day]['end_time']);
+                    
+                    if ($breakStartTime < $dayStartTime || $breakEndTime > $dayEndTime) {
+                        continue; // Skip break outside day's range
+                    }
+                    
+                    $validatedBreaks[] = $validBreak;
+                }
+                
+                $validatedSchedule[$day]['breaks'] = $validatedBreaks;
+            }
+        }
+        
+        return $validatedSchedule;
+    }
+    
     /**
      * Check if a specific time slot is available based on the schedule
      */
-    public function isTimeSlotAvailable(EventEntity $event, \DateTimeInterface $startTime, \DateTimeInterface $endTime): bool
+    public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime): bool
     {
+        // Get the day of the week
+        $dayOfWeek = strtolower($startDateTime->format('l'));
+        
+        // Get the event schedule
         $schedule = $this->getScheduleForEvent($event);
-        if (!$schedule) {
-            return false; // No schedule means not available
+        
+        // Check if this day is enabled
+        if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+            return false; // Day not available
         }
         
-        $scheduleData = $schedule->getSchedule();
-        $dayOfWeek = strtolower($startTime->format('l'));
+        // Extract just the time component for comparison
+        $startTime = $startDateTime->format('H:i:s');
+        $endTime = $endDateTime->format('H:i:s');
         
-        // Check if the day is enabled in the schedule
-        if (!isset($scheduleData[$dayOfWeek]) || !$scheduleData[$dayOfWeek]['enabled']) {
-            return false;
+        // Check if within working hours
+        $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
+        $scheduleEndTime = $schedule[$dayOfWeek]['end_time'];
+        
+        if ($startTime < $scheduleStartTime || $endTime > $scheduleEndTime) {
+            return false; // Not within working hours
         }
         
-        // Get the day's schedule
-        $daySchedule = $scheduleData[$dayOfWeek];
-        
-        // Check if the time is within the day's working hours
-        $workingStartTime = \DateTime::createFromFormat('H:i', $daySchedule['startTime']);
-        $workingEndTime = \DateTime::createFromFormat('H:i', $daySchedule['endTime']);
-        
-        $requestStartTime = clone $startTime;
-        $requestStartTime->setDate(1970, 1, 1);
-        
-        $requestEndTime = clone $endTime;
-        $requestEndTime->setDate(1970, 1, 1);
-        
-        if ($requestStartTime < $workingStartTime || $requestEndTime > $workingEndTime) {
-            return false;
-        }
-        
-        // Check if the time overlaps with any pauses
-        foreach ($daySchedule['pauses'] as $pause) {
-            $pauseStartTime = \DateTime::createFromFormat('H:i', $pause['startTime']);
-            $pauseEndTime = \DateTime::createFromFormat('H:i', $pause['endTime']);
+        // Check for conflicts with breaks
+        foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
+            $breakStartTime = $break['start_time'];
+            $breakEndTime = $break['end_time'];
             
             // Check for overlap
             if (
-                ($requestStartTime >= $pauseStartTime && $requestStartTime < $pauseEndTime) ||
-                ($requestEndTime > $pauseStartTime && $requestEndTime <= $pauseEndTime) ||
-                ($requestStartTime <= $pauseStartTime && $requestEndTime >= $pauseEndTime)
+                ($startTime < $breakEndTime && $endTime > $breakStartTime) ||
+                ($startTime <= $breakStartTime && $endTime >= $breakEndTime)
             ) {
-                return false;
+                return false; // Overlaps with a break
             }
         }
         
-        return true;
+        return true; // Available
     }
-
+    
     /**
      * Get available time slots for a day based on the schedule
      */
-    public function getAvailableTimeSlots(EventEntity $event, \DateTimeInterface $date, int $durationMinutes = 30): array
+    public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, int $durationMinutes = 30): array
     {
-        $schedule = $this->getScheduleForEvent($event);
-        if (!$schedule) {
-            return [];
-        }
-        
-        $scheduleData = $schedule->getSchedule();
+        // Get the day of the week
         $dayOfWeek = strtolower($date->format('l'));
         
-        // Check if the day is enabled in the schedule
-        if (!isset($scheduleData[$dayOfWeek]) || !$scheduleData[$dayOfWeek]['enabled']) {
-            return [];
+        // Get the event schedule
+        $schedule = $this->getScheduleForEvent($event);
+        
+        // Check if this day is enabled
+        if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+            return []; // No schedule for this day
         }
         
-        // Get the day's schedule
-        $daySchedule = $scheduleData[$dayOfWeek];
+        // Extract schedule times
+        $scheduleStartTime = clone $date;
+        list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
+        $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
         
-        $workingStartTime = \DateTime::createFromFormat('H:i', $daySchedule['startTime']);
-        $workingEndTime = \DateTime::createFromFormat('H:i', $daySchedule['endTime']);
+        $scheduleEndTime = clone $date;
+        list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
+        $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
         
-        if (!$workingStartTime || !$workingEndTime) {
-            return [];
-        }
-        
-        // Set the date part to the requested date
-        $startDateTime = clone $date;
-        $startDateTime->setTime(
-            (int)$workingStartTime->format('H'),
-            (int)$workingStartTime->format('i')
-        );
-        
-        $endDateTime = clone $date;
-        $endDateTime->setTime(
-            (int)$workingEndTime->format('H'),
-            (int)$workingEndTime->format('i')
-        );
-        
-        // Generate time slots in intervals
-        $timeSlots = [];
-        $slotDuration = new \DateInterval('PT' . $durationMinutes . 'M');
-        $currentSlot = clone $startDateTime;
-        
-        while ($currentSlot->add($slotDuration) <= $endDateTime) {
-            $slotStart = clone $currentSlot;
-            $slotStart->sub($slotDuration); // Go back to start of slot
-            $slotEnd = clone $currentSlot;
+        // Convert breaks to DateTime objects
+        $breaks = [];
+        foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
+            $breakStart = clone $date;
+            list($hours, $minutes, $seconds) = explode(':', $break['start_time']);
+            $breakStart->setTime((int)$hours, (int)$minutes, (int)$seconds);
             
-            // Check if slot overlaps with any pauses
-            $overlapsWithPause = false;
-            foreach ($daySchedule['pauses'] as $pause) {
-                $pauseStart = \DateTime::createFromFormat('H:i', $pause['startTime']);
-                $pauseEnd = \DateTime::createFromFormat('H:i', $pause['endTime']);
-                
-                if (!$pauseStart || !$pauseEnd) {
-                    continue;
-                }
-                
-                // Set date part to match the requested date
-                $pauseStartDateTime = clone $date;
-                $pauseStartDateTime->setTime(
-                    (int)$pauseStart->format('H'),
-                    (int)$pauseStart->format('i')
-                );
-                
-                $pauseEndDateTime = clone $date;
-                $pauseEndDateTime->setTime(
-                    (int)$pauseEnd->format('H'),
-                    (int)$pauseEnd->format('i')
-                );
-                
-                // Check for overlap
+            $breakEnd = clone $date;
+            list($hours, $minutes, $seconds) = explode(':', $break['end_time']);
+            $breakEnd->setTime((int)$hours, (int)$minutes, (int)$seconds);
+            
+            $breaks[] = [
+                'start' => $breakStart,
+                'end' => $breakEnd
+            ];
+        }
+        
+        // Generate time slots
+        $timeSlots = [];
+        $slotStart = clone $scheduleStartTime;
+        $slotDuration = new \DateInterval('PT' . $durationMinutes . 'M');
+        
+        while ($slotStart < $scheduleEndTime) {
+            $slotEnd = clone $slotStart;
+            $slotEnd->add($slotDuration);
+            
+            // If slot end is after schedule end, break the loop
+            if ($slotEnd > $scheduleEndTime) {
+                break;
+            }
+            
+            // Check for conflicts with breaks
+            $hasConflict = false;
+            foreach ($breaks as $break) {
                 if (
-                    ($slotStart >= $pauseStartDateTime && $slotStart < $pauseEndDateTime) ||
-                    ($slotEnd > $pauseStartDateTime && $slotEnd <= $pauseEndDateTime) ||
-                    ($slotStart <= $pauseStartDateTime && $slotEnd >= $pauseEndDateTime)
+                    ($slotStart < $break['end'] && $slotEnd > $break['start']) ||
+                    ($slotStart <= $break['start'] && $slotEnd >= $break['end'])
                 ) {
-                    $overlapsWithPause = true;
+                    $hasConflict = true;
                     break;
                 }
             }
             
-            if (!$overlapsWithPause) {
+            if (!$hasConflict) {
                 $timeSlots[] = [
                     'start' => $slotStart->format('Y-m-d H:i:s'),
                     'end' => $slotEnd->format('Y-m-d H:i:s')
                 ];
             }
+            
+            // Move to next slot
+            $slotStart->add($slotDuration);
         }
         
         return $timeSlots;
     }
-
-    public function deleteSchedule(EventScheduleEntity $schedule): void
+    
+    /**
+     * Get available dates within a range based on the event schedule
+     */
+    public function getAvailableDates(EventEntity $event, \DateTimeInterface $startDate, \DateTimeInterface $endDate): array
     {
-        try {
-            $this->entityManager->remove($schedule);
-            $this->entityManager->flush();
-        } catch (\Exception $e) {
-            throw new EventsException('Failed to delete schedule: ' . $e->getMessage());
+        // Get the event schedule
+        $schedule = $this->getScheduleForEvent($event);
+        
+        // Create a map of enabled days
+        $enabledDays = [];
+        foreach ($schedule as $day => $dayData) {
+            if ($dayData['enabled']) {
+                $enabledDays[$day] = true;
+            }
         }
+        
+        // Generate list of available dates
+        $availableDates = [];
+        $currentDate = clone $startDate;
+        
+        while ($currentDate <= $endDate) {
+            $dayOfWeek = strtolower($currentDate->format('l'));
+            
+            if (isset($enabledDays[$dayOfWeek])) {
+                $availableDates[] = $currentDate->format('Y-m-d');
+            }
+            
+            $currentDate->modify('+1 day');
+        }
+        
+        return $availableDates;
     }
 }

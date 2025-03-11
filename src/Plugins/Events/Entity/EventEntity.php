@@ -39,6 +39,8 @@ class EventEntity
     #[ORM\Column(name: "duration", type: "integer", options: ["default" => 30])]
     private int $duration = 30;
     
+    #[ORM\Column(name: "schedule", type: "json", nullable: true)]
+    private ?array $schedule = null;
     
     #[ORM\ManyToOne(targetEntity: UserEntity::class)]
     #[ORM\JoinColumn(name: "created_by", referencedColumnName: "id", nullable: false)]
@@ -57,6 +59,16 @@ class EventEntity
     {
         $this->created = new DateTime();
         $this->updated = new DateTime();
+        // Default empty schedule with all days
+        $this->schedule = [
+            'monday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'tuesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'wednesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'thursday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'friday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'saturday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'sunday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []]
+        ];
     }
 
     public function getId(): int
@@ -119,7 +131,6 @@ class EventEntity
         return $this;
     }
 
-  
     public function getDuration(): int
     {
         return $this->duration;
@@ -128,6 +139,17 @@ class EventEntity
     public function setDuration(int $duration): self
     {
         $this->duration = $duration;
+        return $this;
+    }
+    
+    public function getSchedule(): ?array
+    {
+        return $this->schedule;
+    }
+    
+    public function setSchedule(?array $schedule): self
+    {
+        $this->schedule = $schedule;
         return $this;
     }
     
@@ -177,6 +199,7 @@ class EventEntity
             'slug' => $this->getSlug(),
             'duration' => $this->getDuration(),
             'description' => $this->getDescription(),
+            'schedule' => $this->getSchedule(),
             'organization_id' => $this->getOrganization()->getId(),
             'created_by' => $this->getCreatedBy()->getId(),
             'deleted' => $this->isDeleted(),
