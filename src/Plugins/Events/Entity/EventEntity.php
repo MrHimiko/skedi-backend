@@ -36,8 +36,8 @@ class EventEntity
     #[ORM\JoinColumn(name: "team_id", referencedColumnName: "id", nullable: true)]
     private ?TeamEntity $team = null;   
 
-    #[ORM\Column(name: "duration", type: "integer", options: ["default" => 30])]
-    private int $duration = 30;
+    #[ORM\Column(name: "duration", type: "json", nullable: true)]
+    private ?array $duration = null;
     
     #[ORM\Column(name: "schedule", type: "json", nullable: true)]
     private ?array $schedule = null;
@@ -59,13 +59,13 @@ class EventEntity
     {
         $this->created = new DateTime();
         $this->updated = new DateTime();
-        // Default empty schedule with all days
+        // Default schedule with Mon-Fri enabled, Sat-Sun disabled
         $this->schedule = [
-            'monday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-            'tuesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-            'wednesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-            'thursday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-            'friday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'monday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'tuesday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'wednesday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'thursday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+            'friday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
             'saturday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
             'sunday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []]
         ];
@@ -131,17 +131,31 @@ class EventEntity
         return $this;
     }
 
-    public function getDuration(): int
+
+    public function getDuration(): ?array
     {
         return $this->duration;
     }
 
-    public function setDuration(int $duration): self
+    public function setDuration(?array $duration): self
     {
+   
+        if ($duration === null) {
+            $duration = [
+                [
+                    'title' => 'Standard Meeting',
+                    'description' => '',
+                    'duration' => 30
+                ]
+            ];
+        }
+        
         $this->duration = $duration;
         return $this;
     }
-    
+
+ 
+
     public function getSchedule(): ?array
     {
         return $this->schedule;

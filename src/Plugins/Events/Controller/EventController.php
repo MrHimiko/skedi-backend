@@ -64,11 +64,8 @@ class EventController extends AbstractController
             foreach ($events as $event) {
                 $eventData = $event->toArray();
                 
-                // Add schedules and breaks
-                $schedules = $this->scheduleService->getSchedulesForEvent($event);
-                $eventData['schedules'] = array_map(function($schedule) {
-                    return $schedule->toArray();
-                }, $schedules);
+                // Add schedule to response
+                $eventData['schedule'] = $event->getSchedule();
                 
                 // Add booking options
                 $bookingOptions = $this->eventService->getBookingOptions($event);
@@ -117,11 +114,8 @@ class EventController extends AbstractController
             
             $eventData = $event->toArray();
             
-            // Add schedules and breaks
-            $schedules = $this->scheduleService->getSchedulesForEvent($event);
-            $eventData['schedules'] = array_map(function($schedule) {
-                return $schedule->toArray();
-            }, $schedules);
+            // Add schedule to response
+            $eventData['schedule'] = $event->getSchedule();
             
             // Add form fields
             $formFields = $this->eventService->getFormFields($event);
@@ -173,10 +167,6 @@ class EventController extends AbstractController
             if (!isset($data['duration'])) {
                 $data['duration'] = 30; 
             }
-                
-            // Get schedules from request data
-            $schedulesData = $data['schedules'] ?? [];
-            unset($data['schedules']);
             
             // Check team if provided
             if (!empty($data['team_id'])) {
@@ -200,19 +190,11 @@ class EventController extends AbstractController
                 }
             });
             
-            // Create schedules if provided
-            if (!empty($schedulesData)) {
-                $this->scheduleService->updateEventSchedules($event, $schedulesData);
-            }
-            
             // Prepare response
             $eventData = $event->toArray();
             
-            // Add schedules to response
-            $schedules = $this->scheduleService->getSchedulesForEvent($event);
-            $eventData['schedules'] = array_map(function($schedule) {
-                return $schedule->toArray();
-            }, $schedules);
+            // Add schedule to response
+            $eventData['schedule'] = $event->getSchedule();
             
             // Add form fields
             $formFields = $this->eventService->getFormFields($event);
@@ -266,10 +248,6 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Event was not found.');
             }
             
-            // Get schedules from request data
-            $schedulesData = $data['schedules'] ?? null;
-            unset($data['schedules']);
-            
             // Check team if provided
             if (!empty($data['team_id'])) {
                 $team = $this->teamService->getTeamByIdAndOrganization($data['team_id'], $organization->entity);
@@ -282,19 +260,11 @@ class EventController extends AbstractController
             // Update the event
             $this->eventService->update($event, $data);
             
-            // Update schedules if provided
-            if ($schedulesData !== null) {
-                $this->scheduleService->updateEventSchedules($event, $schedulesData);
-            }
-            
             // Prepare response
             $eventData = $event->toArray();
             
-            // Add schedules to response
-            $schedules = $this->scheduleService->getSchedulesForEvent($event);
-            $eventData['schedules'] = array_map(function($schedule) {
-                return $schedule->toArray();
-            }, $schedules);
+            // Add schedule to response
+            $eventData['schedule'] = $event->getSchedule();
             
             // Add form fields
             $formFields = $this->eventService->getFormFields($event);

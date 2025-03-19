@@ -25,14 +25,14 @@ class EventScheduleService
     {
         $schedule = $event->getSchedule();
         
-        // Return an empty default schedule if none exists
+        // Return default schedule if none exists
         if (empty($schedule)) {
             return [
-                'monday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-                'tuesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-                'wednesday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-                'thursday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
-                'friday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'monday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'tuesday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'wednesday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'thursday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
+                'friday' => ['enabled' => true, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
                 'saturday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []],
                 'sunday' => ['enabled' => false, 'start_time' => '09:00:00', 'end_time' => '17:00:00', 'breaks' => []]
             ];
@@ -80,7 +80,7 @@ class EventScheduleService
         // Create default schedule structure for all days first
         foreach ($validDays as $day) {
             $validatedSchedule[$day] = [
-                'enabled' => false,
+                'enabled' => $day !== 'saturday' && $day !== 'sunday', // Default: Mon-Fri enabled
                 'start_time' => '09:00:00',
                 'end_time' => '17:00:00',
                 'breaks' => []
@@ -198,8 +198,7 @@ class EventScheduleService
         
         return $validatedSchedule;
     }
-    
-    /**
+/**
      * Check if a specific time slot is available based on the schedule
      */
     public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime): bool
@@ -243,6 +242,7 @@ class EventScheduleService
         
         return true; // Available
     }
+    
     
     /**
      * Get available time slots for a day based on the schedule

@@ -8,7 +8,7 @@ use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 
 use App\Plugins\Events\Entity\EventEntity;
-use App\Plugins\Events\Entity\EventScheduleEntity;
+use App\Plugins\Events\Entity\EventTimeSlotEntity;
 use App\Plugins\Events\Entity\EventFormFieldEntity;
 use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventAssigneeEntity;
@@ -115,6 +115,9 @@ class EventService
                 'organization_id' => [
                     new Assert\Type('integer') 
                 ],
+                'schedule' => new Assert\Optional([
+                    new Assert\Type('array')
+                ]),
             ];
             
             $transform = [
@@ -226,6 +229,12 @@ class EventService
                     new Assert\Type('integer'),
                     new Assert\Range(['min' => 15, 'max' => 1440]) 
                 ]),
+                'schedule' => new Assert\Optional([
+                    new Assert\Type('array')
+                ]),
+                'organization_id' => [
+                    new Assert\Type('integer') 
+                ],
             ];
             
             $transform = [
@@ -295,7 +304,7 @@ class EventService
             // Update time slots if provided
             if ($timeSlots !== null && is_array($timeSlots)) {
                 // Remove existing time slots
-                $existingSlots = $this->entityManager->getRepository(EventScheduleEntity::class)
+                $existingSlots = $this->entityManager->getRepository(EventTimeSlotEntity::class)
                     ->findBy(['event' => $event]);
                     
                 foreach ($existingSlots as $existingSlot) {
@@ -411,7 +420,7 @@ class EventService
     
     public function getTimeSlots(EventEntity $event): array
     {
-        return $this->entityManager->getRepository(EventScheduleEntity::class)
+        return $this->entityManager->getRepository(EventTimeSlotEntity::class)
             ->findBy(['event' => $event], ['startTime' => 'ASC']);
     }
     
@@ -427,7 +436,7 @@ class EventService
             ->findBy(['event' => $event, 'active' => true]);
     }
     
-    private function addTimeSlot(EventEntity $event, array $data): EventScheduleEntity
+    private function addTimeSlot(EventEntity $event, array $data): EventTimeSlotEntity
     {
         try {
             if (empty($data['start_time']) || empty($data['end_time'])) {
@@ -446,7 +455,7 @@ class EventService
                 throw new EventsException('End time must be after start time');
             }
             
-            $timeSlot = new EventScheduleEntity();
+            $timeSlot = new EventTimeSlotEntity();
             $timeSlot->setEvent($event);
             $timeSlot->setStartTime($startTime);
             $timeSlot->setEndTime($endTime);
