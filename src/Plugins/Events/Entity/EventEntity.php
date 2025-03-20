@@ -136,10 +136,10 @@ class EventEntity
     {
         return $this->duration;
     }
+    
 
     public function setDuration(?array $duration): self
     {
-   
         if ($duration === null) {
             $duration = [
                 [
@@ -150,10 +150,22 @@ class EventEntity
             ];
         }
         
+
+        foreach ($duration as &$option) {
+            if (!isset($option['title'])) {
+                $option['title'] = 'Untitled Meeting';
+            }
+            if (!isset($option['description'])) {
+                $option['description'] = '';
+            }
+            if (!isset($option['duration']) || !is_numeric($option['duration'])) {
+                $option['duration'] = 30;
+            }
+        }
+        
         $this->duration = $duration;
         return $this;
-    }
-
+    }   
  
 
     public function getSchedule(): ?array

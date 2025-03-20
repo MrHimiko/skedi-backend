@@ -95,6 +95,22 @@ class EventBookingService
             $booking->setEndTime($endTime);
             $booking->setStatus('confirmed'); // Default status
             
+            // Handle duration option selection
+            if (isset($data['duration_index']) && is_numeric($data['duration_index'])) {
+                $durations = $event->getDuration();
+                $durationIndex = (int)$data['duration_index'];
+                
+                if (isset($durations[$durationIndex])) {
+                    // Prepare form data if it doesn't exist
+                    if (empty($data['form_data']) || !is_array($data['form_data'])) {
+                        $data['form_data'] = [];
+                    }
+                    
+                    // Store the selected duration option in the form data
+                    $data['form_data']['selected_duration'] = $durations[$durationIndex];
+                }
+            }
+            
             // Set booking option if provided
             if (!empty($data['booking_option_id'])) {
                 $bookingOption = $this->entityManager->getRepository(EventBookingOptionEntity::class)

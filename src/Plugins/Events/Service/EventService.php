@@ -108,10 +108,9 @@ class EventService
                 'team_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
                 ]),
-                'duration' => [
-                    new Assert\Type('integer'),
-                    new Assert\Range(['min' => 15, 'max' => 1440]) 
-                ],
+                'duration' => new Assert\Optional([
+                    new Assert\Type('array')
+                ]),
                 'organization_id' => [
                     new Assert\Type('integer') 
                 ],
@@ -226,8 +225,7 @@ class EventService
                     new Assert\Type('numeric'),
                 ]),
                 'duration' => new Assert\Optional([
-                    new Assert\Type('integer'),
-                    new Assert\Range(['min' => 15, 'max' => 1440]) 
+                        new Assert\Type('array')
                 ]),
                 'schedule' => new Assert\Optional([
                     new Assert\Type('array')

@@ -247,8 +247,14 @@ class EventScheduleService
     /**
      * Get available time slots for a day based on the schedule
      */
-    public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, int $durationMinutes = 30): array
-    {
+    public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, ?int $durationMinutes = null): array
+    {   
+
+        if ($durationMinutes === null) {
+            $durations = $event->getDuration();
+            $durationMinutes = isset($durations[0]['duration']) ? (int)$durations[0]['duration'] : 30;
+        }
+        
         // Get the day of the week
         $dayOfWeek = strtolower($date->format('l'));
         

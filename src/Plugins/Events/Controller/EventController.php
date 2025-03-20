@@ -164,8 +164,25 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Organization was not found.');
             }
       
-            if (!isset($data['duration'])) {
-                $data['duration'] = 30; 
+            // Handle the duration format conversion
+            if (isset($data['duration']) && is_numeric($data['duration'])) {
+                // Convert single integer duration to array format
+                $data['duration'] = [
+                    [
+                        'title' => 'Standard Meeting',
+                        'description' => '',
+                        'duration' => (int)$data['duration']
+                    ]
+                ];
+            } elseif (!isset($data['duration']) || !is_array($data['duration'])) {
+                // Set default duration if not provided
+                $data['duration'] = [
+                    [
+                        'title' => 'Standard Meeting',
+                        'description' => '',
+                        'duration' => 30
+                    ]
+                ];
             }
             
             // Check team if provided
@@ -246,6 +263,18 @@ class EventController extends AbstractController
             // Get event by ID ensuring it belongs to the organization
             if (!$event = $this->eventService->getEventByIdAndOrganization($id, $organization->entity)) {
                 return $this->responseService->json(false, 'Event was not found.');
+            }
+            
+            // Handle the duration format conversion
+            if (isset($data['duration']) && is_numeric($data['duration'])) {
+                // Convert single integer duration to array format
+                $data['duration'] = [
+                    [
+                        'title' => 'Standard Meeting',
+                        'description' => '',
+                        'duration' => (int)$data['duration']
+                    ]
+                ];
             }
             
             // Check team if provided
@@ -329,7 +358,7 @@ class EventController extends AbstractController
         $user = $request->attributes->get('user');
         $organization_id = $request->query->get('organization_id');
         $date = $request->query->get('date');
-        $duration = (int)$request->query->get('duration', 30);
+        $durationIndex = (int)$request->query->get('duration_index', 0);
         
         try {
             // Check if organization_id is provided
@@ -352,11 +381,25 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Event was not found.');
             }
             
+            // Get duration from event
+            $durations = $event->getDuration();
+            $duration = 30; // Default duration
+            
+            // Get specified duration option if it exists
+            if (isset($durations[$durationIndex]) && isset($durations[$durationIndex]['duration'])) {
+                $duration = (int)$durations[$durationIndex]['duration'];
+            }
+            
             // Get available slots
             $dateObj = new \DateTime($date);
             $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $duration);
             
-            return $this->responseService->json(true, 'Available slots retrieved successfully.', $slots);
+            return $this->responseService->json(true, 'Available slots retrieved successfully.', [
+                'slots' => $slots,
+                'duration' => $duration,
+                'duration_index' => $durationIndex,
+                'duration_options' => $durations
+            ]);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
