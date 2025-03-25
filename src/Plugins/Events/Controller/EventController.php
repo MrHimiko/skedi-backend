@@ -10,7 +10,10 @@ use App\Plugins\Events\Service\EventService;
 use App\Plugins\Events\Service\EventScheduleService;
 use App\Plugins\Events\Exception\EventsException;
 use App\Plugins\Organizations\Service\UserOrganizationService;
+use App\Plugins\Organizations\Service\OrganizationService;
 use App\Plugins\Teams\Service\TeamService;
+
+
 
 #[Route('/api')]
 class EventController extends AbstractController
@@ -20,19 +23,23 @@ class EventController extends AbstractController
     private EventScheduleService $scheduleService;
     private UserOrganizationService $userOrganizationService;
     private TeamService $teamService;
+    private OrganizationService $organizationService;
 
+ 
     public function __construct(
         ResponseService $responseService,
         EventService $eventService,
         EventScheduleService $scheduleService,
         UserOrganizationService $userOrganizationService,
-        TeamService $teamService
+        TeamService $teamService,
+        OrganizationService $organizationService  
     ) {
         $this->responseService = $responseService;
         $this->eventService = $eventService;
         $this->scheduleService = $scheduleService;
         $this->userOrganizationService = $userOrganizationService;
         $this->teamService = $teamService;
+        $this->organizationService = $organizationService; 
     }
 
     #[Route('/events', name: 'events_get_many#', methods: ['GET'])]
@@ -406,4 +413,99 @@ class EventController extends AbstractController
             return $this->responseService->json(false, $e, null, 500);
         }
     }
+
+
+
+
+    /* PUBLIC ROUTE WITHOUT USER AUTHENTICATION */
+    #[Route('/public/organizations/{org_slug}/events/{event_slug}', name: 'public_event_info', methods: ['GET'])]
+    public function getPublicEventInfo(string $org_slug, string $event_slug, Request $request): JsonResponse
+    {
+        try {
+            // Get organization by slug
+            $organization = $this->organizationService->getBySlug($org_slug);
+            
+            if (!$organization) {
+                return $this->responseService->json(false, 'not-found', null, 404);
+            }
+            
+            // Get event by slug and organization
+            $event = $this->eventService->getEventBySlug($event_slug, null, $organization);
+            
+            if (!$event || $event->isDeleted()) {
+                return $this->responseService->json(false, 'not-found', null, 404);
+            }
+            
+            $eventData = $event->toArray();
+            
+            // Add schedule to response
+            $eventData['schedule'] = $event->getSchedule();
+            
+            // Add form fields
+            $formFields = $this->eventService->getFormFields($event);
+            $eventData['form_fields'] = array_map(function($field) {
+                return $field->toArray();
+            }, $formFields);
+            
+            // Add booking options
+            $bookingOptions = $this->eventService->getBookingOptions($event);
+            $eventData['booking_options'] = array_map(function($option) {
+                return $option->toArray();
+            }, $bookingOptions);
+            
+            // Remove sensitive data
+            unset($eventData['created_by']);
+            
+            return $this->responseService->json(true, 'retrieve', $eventData);
+        } catch (EventsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, $e, null, 500);
+        }
+    }
+
+    #[Route('/public/organizations/{org_slug}/events/{event_slug}/available-slots', name: 'public_event_available_slots', methods: ['GET'])]
+    public function getPublicAvailableSlots(string $org_slug, string $event_slug, Request $request): JsonResponse
+    {
+        $date = $request->query->get('date');
+        $duration = (int)$request->query->get('duration', 30);
+        
+        if (!$date) {
+            return $this->responseService->json(false, 'Date parameter is required.', null, 400);
+        }
+        
+        try {
+            // Get organization by slug
+            $organization = $this->organizationService->getBySlug($org_slug);
+            
+            if (!$organization) {
+                return $this->responseService->json(false, 'not-found', null, 404);
+            }
+            
+            // Get event by slug and organization
+            $event = $this->eventService->getEventBySlug($event_slug, null, $organization);
+            
+            if (!$event || $event->isDeleted()) {
+                return $this->responseService->json(false, 'not-found', null, 404);
+            }
+            
+            // Get available slots for the specified date
+            $dateObj = new \DateTime($date);
+            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $duration);
+            
+            return $this->responseService->json(true, 'retrieve', $slots);
+        } catch (EventsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, $e, null, 500);
+        }
+    }
+
+
+
+
+
+
+
+
 }

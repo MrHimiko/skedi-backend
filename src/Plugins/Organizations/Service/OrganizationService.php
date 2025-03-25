@@ -145,7 +145,7 @@ class OrganizationService
         }
     }
 
-    private function getBySlug(string $slug)
+    public function getBySlug(string $slug)
     {
         $organizations = $this->getMany([], 1, 1, ['slug' => $slug, 'deleted' => false]);
 
