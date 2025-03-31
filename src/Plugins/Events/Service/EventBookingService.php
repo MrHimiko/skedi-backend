@@ -9,7 +9,6 @@ use Symfony\Component\Validator\Constraints as Assert;
 
 use App\Plugins\Events\Entity\EventEntity;
 use App\Plugins\Events\Entity\EventBookingEntity;
-use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventGuestEntity;
 use App\Plugins\Events\Entity\ContactEntity;
 use App\Plugins\Events\Exception\EventsException;
@@ -111,15 +110,7 @@ class EventBookingService
                 }
             }
             
-            // Set booking option if provided
-            if (!empty($data['booking_option_id'])) {
-                $bookingOption = $this->entityManager->getRepository(EventBookingOptionEntity::class)
-                    ->find($data['booking_option_id']);
-                    
-                if ($bookingOption && $bookingOption->getEvent()->getId() === $event->getId()) {
-                    $booking->setBookingOption($bookingOption);
-                }
-            }
+
             
             // Save form data if provided
             if (!empty($data['form_data']) && is_array($data['form_data'])) {
@@ -175,16 +166,7 @@ class EventBookingService
                     $timeUpdated = true;
                 }
             }
-            
-            // Update booking option if provided
-            if (!empty($data['booking_option_id'])) {
-                $bookingOption = $this->entityManager->getRepository(EventBookingOptionEntity::class)
-                    ->find($data['booking_option_id']);
-                    
-                if ($bookingOption && $bookingOption->getEvent()->getId() === $booking->getEvent()->getId()) {
-                    $booking->setBookingOption($bookingOption);
-                }
-            }
+
             
             // Update form data if provided
             if (!empty($data['form_data']) && is_array($data['form_data'])) {
@@ -388,18 +370,26 @@ class EventBookingService
             $this->entityManager->persist($guest);
             $this->entityManager->flush();
             
-            // Update or create contact record
-            $this->contactService->updateOrCreate([
-                'name' => $guestData['name'],
-                'email' => $guestData['email'],
-                'phone' => $guestData['phone'] ?? null,
-                'last_event_id' => $booking->getEvent()->getId(),
-                'last_interaction' => new DateTime(),
-            ]);
+            // Create a new contact record
+            $contact = new ContactEntity();
+            $contact->setName($guestData['name']);
+            $contact->setEmail($guestData['email']);
+            
+            if (!empty($guestData['phone'])) {
+                $contact->setPhone($guestData['phone']);
+            }
+            
+            // Set direct entity references instead of IDs
+            $contact->setEvent($booking->getEvent());
+            $contact->setBooking($booking);
+            
+            $this->entityManager->persist($contact);
+            $this->entityManager->flush();
             
             return $guest;
         } catch (\Exception $e) {
             throw new EventsException($e->getMessage());
         }
     }
+
 }

@@ -26,9 +26,6 @@ class EventBookingEntity
     #[ORM\Column(name: "end_time", type: "datetime", nullable: false)]
     private DateTimeInterface $endTime;
     
-    #[ORM\ManyToOne(targetEntity: EventBookingOptionEntity::class)]
-    #[ORM\JoinColumn(name: "booking_option_id", referencedColumnName: "id", nullable: true)]
-    private ?EventBookingOptionEntity $bookingOption = null;
     
     #[ORM\Column(name: "status", type: "string", length: 50, options: ["default" => "confirmed"])]
     private string $status = 'confirmed';
@@ -89,16 +86,7 @@ class EventBookingEntity
         return $this;
     }
     
-    public function getBookingOption(): ?EventBookingOptionEntity
-    {
-        return $this->bookingOption;
-    }
-    
-    public function setBookingOption(?EventBookingOptionEntity $bookingOption): self
-    {
-        $this->bookingOption = $bookingOption;
-        return $this;
-    }
+
     
     public function getStatus(): string
     {
@@ -174,10 +162,7 @@ class EventBookingEntity
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),
         ];
         
-        if ($this->getBookingOption()) {
-            $data['booking_option'] = $this->getBookingOption()->toArray();
-        }
-        
+
         return $data;
     }
 }

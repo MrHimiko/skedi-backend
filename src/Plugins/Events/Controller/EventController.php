@@ -74,12 +74,7 @@ class EventController extends AbstractController
                 // Add schedule to response
                 $eventData['schedule'] = $event->getSchedule();
                 
-                // Add booking options
-                $bookingOptions = $this->eventService->getBookingOptions($event);
-                $eventData['booking_options'] = array_map(function($option) {
-                    return $option->toArray();
-                }, $bookingOptions);
-                
+
                 // Add assignees
                 $assignees = $this->eventService->getAssignees($event);
                 $eventData['assignees'] = array_map(function($assignee) {
@@ -130,11 +125,7 @@ class EventController extends AbstractController
                 return $field->toArray();
             }, $formFields);
             
-            // Add booking options
-            $bookingOptions = $this->eventService->getBookingOptions($event);
-            $eventData['booking_options'] = array_map(function($option) {
-                return $option->toArray();
-            }, $bookingOptions);
+
             
             // Add assignees
             $assignees = $this->eventService->getAssignees($event);
@@ -226,11 +217,6 @@ class EventController extends AbstractController
                 return $field->toArray();
             }, $formFields);
             
-            // Add booking options
-            $bookingOptions = $this->eventService->getBookingOptions($event);
-            $eventData['booking_options'] = array_map(function($option) {
-                return $option->toArray();
-            }, $bookingOptions);
             
             // Add assignees
             $assignees = $this->eventService->getAssignees($event);
@@ -308,11 +294,6 @@ class EventController extends AbstractController
                 return $field->toArray();
             }, $formFields);
             
-            // Add booking options
-            $bookingOptions = $this->eventService->getBookingOptions($event);
-            $eventData['booking_options'] = array_map(function($option) {
-                return $option->toArray();
-            }, $bookingOptions);
             
             // Add assignees
             $assignees = $this->eventService->getAssignees($event);
@@ -446,12 +427,7 @@ class EventController extends AbstractController
             $eventData['form_fields'] = array_map(function($field) {
                 return $field->toArray();
             }, $formFields);
-            
-            // Add booking options
-            $bookingOptions = $this->eventService->getBookingOptions($event);
-            $eventData['booking_options'] = array_map(function($option) {
-                return $option->toArray();
-            }, $bookingOptions);
+
             
             // Remove sensitive data
             unset($eventData['created_by']);
@@ -504,8 +480,39 @@ class EventController extends AbstractController
 
 
 
-
-
+    
+    #[Route('/events/{id}/people', name: 'event_people#', methods: ['GET'], requirements: ['id' => '\d+'])]
+    public function getEventPeople(int $id, Request $request): JsonResponse
+    {
+        $user = $request->attributes->get('user');
+        $organization_id = $request->query->get('organization_id');
+        
+        try {
+            // Check if organization_id is provided
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
+            // Check if user has access to this organization
+            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
+                return $this->responseService->json(false, 'Organization was not found.');
+            }
+            
+            // Get event by ID ensuring it belongs to the organization
+            if (!$event = $this->eventService->getEventByIdAndOrganization($id, $organization->entity)) {
+                return $this->responseService->json(false, 'Event was not found.');
+            }
+            
+            // Get all eligible people for this event
+            $people = $this->eventService->getEligiblePeople($event);
+            
+            return $this->responseService->json(true, 'Event eligible people retrieved successfully.', $people);
+        } catch (EventsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, $e, null, 500);
+        }
+    }
 
 
 }

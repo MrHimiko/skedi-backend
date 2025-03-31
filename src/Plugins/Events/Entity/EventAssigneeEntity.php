@@ -25,6 +25,9 @@ class EventAssigneeEntity
     #[ORM\JoinColumn(name: "user_id", referencedColumnName: "id", nullable: false)]
     private UserEntity $user;
 
+    #[ORM\Column(name: "role", type: "string", length: 50, nullable: false, options: ["default" => "member"])]
+    private string $role = 'member';
+
     #[ORM\ManyToOne(targetEntity: UserEntity::class)]
     #[ORM\JoinColumn(name: "assigned_by", referencedColumnName: "id", nullable: false)]
     private UserEntity $assignedBy;
@@ -95,12 +98,25 @@ class EventAssigneeEntity
         return $this->created;
     }
 
+
+    public function getRole(): string
+    {
+        return $this->role;
+    }
+    
+    public function setRole(string $role): self
+    {
+        $this->role = $role;
+        return $this;
+    }
+
     public function toArray(): array
     {
         return [
             'id' => $this->getId(),
             'event_id' => $this->getEvent()->getId(),
             'user' => $this->getUser()->toArray(),
+            'role' => $this->getRole(),
             'assigned_by' => $this->getAssignedBy()->toArray(),
             'updated' => $this->getUpdated()->format('Y-m-d H:i:s'),
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),

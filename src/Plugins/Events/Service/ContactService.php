@@ -9,8 +9,8 @@ use Symfony\Component\Validator\Constraints as Assert;
 
 use App\Plugins\Events\Entity\ContactEntity;
 use App\Plugins\Events\Entity\EventEntity;
+use App\Plugins\Events\Entity\EventBookingEntity;
 use App\Plugins\Events\Exception\EventsException;
-use App\Plugins\Account\Entity\UserEntity;
 
 class ContactService
 {
@@ -70,32 +70,16 @@ class ContactService
                     new Assert\Type('string'),
                     new Assert\Length(['max' => 50]),
                 ]),
-                'notes' => new Assert\Optional([
-                    new Assert\Type('string'),
-                ]),
-                'last_assignee_id' => new Assert\Optional([
+                'event_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
                 ]),
-                'last_event_id' => new Assert\Optional([
+                'booking_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
-                ]),
-                'last_interaction' => new Assert\Optional([
-                    new Assert\DateTime(),
                 ]),
             ];
             
             $transform = [
-                'last_assignee_id' => function($value) {
-                    if ($value) {
-                        $user = $this->entityManager->getRepository(UserEntity::class)->find($value);
-                        if (!$user) {
-                            throw new EventsException('User not found');
-                        }
-                        return $user;
-                    }
-                    return null;
-                },
-                'last_event_id' => function($value) {
+                'event_id' => function($value) {
                     if ($value) {
                         $event = $this->entityManager->getRepository(EventEntity::class)->find($value);
                         if (!$event) {
@@ -105,11 +89,15 @@ class ContactService
                     }
                     return null;
                 },
-                'last_interaction' => function($value) {
-                    if ($value && is_string($value)) {
-                        return new \DateTime($value);
+                'booking_id' => function($value) {
+                    if ($value) {
+                        $booking = $this->entityManager->getRepository(EventBookingEntity::class)->find($value);
+                        if (!$booking) {
+                            throw new EventsException('Booking not found');
+                        }
+                        return $booking;
                     }
-                    return $value;
+                    return null;
                 },
             ];
             
@@ -136,32 +124,16 @@ class ContactService
                     new Assert\Type('string'),
                     new Assert\Length(['max' => 50]),
                 ]),
-                'notes' => new Assert\Optional([
-                    new Assert\Type('string'),
-                ]),
-                'last_assignee_id' => new Assert\Optional([
+                'event_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
                 ]),
-                'last_event_id' => new Assert\Optional([
+                'booking_id' => new Assert\Optional([
                     new Assert\Type('numeric'),
-                ]),
-                'last_interaction' => new Assert\Optional([
-                    new Assert\DateTime(),
                 ]),
             ];
             
             $transform = [
-                'last_assignee_id' => function($value) {
-                    if ($value) {
-                        $user = $this->entityManager->getRepository(UserEntity::class)->find($value);
-                        if (!$user) {
-                            throw new EventsException('User not found');
-                        }
-                        return $user;
-                    }
-                    return null;
-                },
-                'last_event_id' => function($value) {
+                'event_id' => function($value) {
                     if ($value) {
                         $event = $this->entityManager->getRepository(EventEntity::class)->find($value);
                         if (!$event) {
@@ -171,11 +143,15 @@ class ContactService
                     }
                     return null;
                 },
-                'last_interaction' => function($value) {
-                    if ($value && is_string($value)) {
-                        return new \DateTime($value);
+                'booking_id' => function($value) {
+                    if ($value) {
+                        $booking = $this->entityManager->getRepository(EventBookingEntity::class)->find($value);
+                        if (!$booking) {
+                            throw new EventsException('Booking not found');
+                        }
+                        return $booking;
                     }
-                    return $value;
+                    return null;
                 },
             ];
             
@@ -195,34 +171,25 @@ class ContactService
         }
     }
     
-    public function updateOrCreate(array $data): ContactEntity
+    public function createContact(array $data): ContactEntity
     {
         if (empty($data['email'])) {
             throw new EventsException('Email is required');
         }
         
-        // Try to find existing contact
-        $contact = $this->findByEmail($data['email']);
-        
-        if ($contact) {
-            // Update existing contact
-            $this->update($contact, $data);
-            return $contact;
-        } else {
-            // Create new contact
-            return $this->create($data);
-        }
+        // Create a new contact directly
+        return $this->create($data);
     }
     
-    public function getContactsByLastEvent(EventEntity $event): array
+    public function getContactsByEvent(EventEntity $event): array
     {
         return $this->entityManager->getRepository(ContactEntity::class)
-            ->findBy(['lastEvent' => $event]);
+            ->findBy(['event' => $event]);
     }
     
-    public function getContactsByLastAssignee(UserEntity $user): array
+    public function getContactsByBooking(EventBookingEntity $booking): array
     {
         return $this->entityManager->getRepository(ContactEntity::class)
-            ->findBy(['lastAssignee' => $user]);
+            ->findBy(['booking' => $booking]);
     }
 }

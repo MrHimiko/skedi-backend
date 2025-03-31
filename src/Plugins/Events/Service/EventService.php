@@ -10,7 +10,6 @@ use Symfony\Component\Validator\Constraints as Assert;
 use App\Plugins\Events\Entity\EventEntity;
 use App\Plugins\Events\Entity\EventTimeSlotEntity;
 use App\Plugins\Events\Entity\EventFormFieldEntity;
-use App\Plugins\Events\Entity\EventBookingOptionEntity;
 use App\Plugins\Events\Entity\EventAssigneeEntity;
 use App\Plugins\Events\Exception\EventsException;
 
@@ -79,7 +78,7 @@ class EventService
             $assignees = $data['assignees'] ?? [];
             $timeSlots = $data['time_slots'] ?? [];
             $formFields = $data['form_fields'] ?? [];
-            $bookingOptions = $data['booking_options'] ?? [];
+
             
             // Remove nested data from validation
             unset($data['assignees']);
@@ -137,20 +136,14 @@ class EventService
             
             $this->crudManager->create($event, $data, $constraints, $transform);
             
-            // Process assignees if provided
-            if (!empty($assignees) && is_array($assignees)) {
-                foreach ($assignees as $assigneeId) {
-                    $assigneeUser = $this->entityManager->getRepository(UserEntity::class)->find($assigneeId);
-                    if ($assigneeUser) {
-                        $assignee = new EventAssigneeEntity();
-                        $assignee->setEvent($event);
-                        $assignee->setUser($assigneeUser);
-                        $assignee->setAssignedBy($event->getCreatedBy()); // Set the creator as the assignedBy
-                        $this->entityManager->persist($assignee);
-                    }
-                }
-                $this->entityManager->flush();
-            }
+            // Add the creator as an assignee with creator role
+            $creatorAssignee = new EventAssigneeEntity();
+            $creatorAssignee->setEvent($event);
+            $creatorAssignee->setUser($event->getCreatedBy());
+            $creatorAssignee->setAssignedBy($event->getCreatedBy());
+            $creatorAssignee->setRole('creator'); // Set role to creator
+            $this->entityManager->persist($creatorAssignee);
+            $this->entityManager->flush();
             
             // Process time slots if provided
             if (!empty($timeSlots) && is_array($timeSlots)) {
@@ -166,13 +159,6 @@ class EventService
                 }
             }
             
-            // Process booking options if provided
-            if (!empty($bookingOptions) && is_array($bookingOptions)) {
-                foreach ($bookingOptions as $optionData) {
-                    $this->addBookingOption($event, $optionData);
-                }
-            }
-            
             return $event;
         } catch (CrudException $e) {
             throw new EventsException($e->getMessage());
@@ -185,8 +171,8 @@ class EventService
             $assignees = $data['assignees'] ?? null;
             $timeSlots = $data['time_slots'] ?? null;
             $formFields = $data['form_fields'] ?? null;
-            $bookingOptions = $data['booking_options'] ?? null;
-            
+    
+           
             // Remove nested data from validation
             unset($data['assignees']);
             unset($data['time_slots']);
@@ -333,22 +319,7 @@ class EventService
                 }
             }
             
-            // Update booking options if provided
-            if ($bookingOptions !== null && is_array($bookingOptions)) {
-                // Remove existing booking options
-                $existingOptions = $this->entityManager->getRepository(EventBookingOptionEntity::class)
-                    ->findBy(['event' => $event]);
-                    
-                foreach ($existingOptions as $existingOption) {
-                    $this->entityManager->remove($existingOption);
-                }
-                $this->entityManager->flush();
-                
-                // Add new booking options
-                foreach ($bookingOptions as $optionData) {
-                    $this->addBookingOption($event, $optionData);
-                }
-            }
+           
         } catch (CrudException $e) {
             throw new EventsException($e->getMessage());
         }
@@ -428,11 +399,7 @@ class EventService
             ->findBy(['event' => $event], ['displayOrder' => 'ASC']);
     }
     
-    public function getBookingOptions(EventEntity $event): array
-    {
-        return $this->entityManager->getRepository(EventBookingOptionEntity::class)
-            ->findBy(['event' => $event, 'active' => true]);
-    }
+
     
     private function addTimeSlot(EventEntity $event, array $data): EventTimeSlotEntity
     {
@@ -496,33 +463,101 @@ class EventService
             throw new EventsException($e->getMessage());
         }
     }
-    
-    private function addBookingOption(EventEntity $event, array $data): EventBookingOptionEntity
+
+
+
+
+    public function getEligiblePeople(EventEntity $event): array
     {
-        try {
-            if (empty($data['name']) || empty($data['duration_minutes'])) {
-                throw new EventsException('Booking option must have a name and duration');
+        $organization = $event->getOrganization();
+        $eventTeam = $event->getTeam();
+        
+        $eligiblePeople = [];
+        $userIdsAdded = [];
+        
+        // 1. Get organization members
+        $orgMembers = $this->entityManager->getRepository('App\Plugins\Organizations\Entity\UserOrganizationEntity')
+            ->findBy(['organization' => $organization]);
+        
+        foreach ($orgMembers as $orgMember) {
+            $user = $orgMember->getUser();
+            $userId = $user->getId();
+            
+            // Avoid duplicates
+            if (in_array($userId, $userIdsAdded)) {
+                continue;
             }
             
-            $bookingOption = new EventBookingOptionEntity();
-            $bookingOption->setEvent($event);
-            $bookingOption->setName($data['name']);
-            $bookingOption->setDurationMinutes((int)$data['duration_minutes']);
-            
-            if (isset($data['description'])) {
-                $bookingOption->setDescription($data['description']);
-            }
-            
-            if (isset($data['active'])) {
-                $bookingOption->setActive((bool)$data['active']);
-            }
-            
-            $this->entityManager->persist($bookingOption);
-            $this->entityManager->flush();
-            
-            return $bookingOption;
-        } catch (\Exception $e) {
-            throw new EventsException($e->getMessage());
+            $userIdsAdded[] = $userId;
+            $eligiblePeople[] = [
+                'user' => $user->toArray(),
+                'source' => [
+                    'type' => 'organization',
+                    'id' => $organization->getId(),
+                    'name' => $organization->getName()
+                ],
+                'role' => $orgMember->getRole()
+            ];
         }
+        
+        // 2. If event belongs to a team, get team members
+        if ($eventTeam) {
+            $teamMembers = $this->entityManager->getRepository('App\Plugins\Teams\Entity\UserTeamEntity')
+                ->findBy(['team' => $eventTeam]);
+                
+            foreach ($teamMembers as $teamMember) {
+                $user = $teamMember->getUser();
+                $userId = $user->getId();
+                
+                // Avoid duplicates
+                if (in_array($userId, $userIdsAdded)) {
+                    continue;
+                }
+                
+                $userIdsAdded[] = $userId;
+                $eligiblePeople[] = [
+                    'user' => $user->toArray(),
+                    'source' => [
+                        'type' => 'team',
+                        'id' => $eventTeam->getId(),
+                        'name' => $eventTeam->getName()
+                    ],
+                    'role' => $teamMember->getRole()
+                ];
+            }
+            
+            // 3. Get parent team members (if applicable)
+            $parentTeam = $eventTeam->getParentTeam();
+            while ($parentTeam) {
+                $parentTeamMembers = $this->entityManager->getRepository('App\Plugins\Teams\Entity\UserTeamEntity')
+                    ->findBy(['team' => $parentTeam]);
+                    
+                foreach ($parentTeamMembers as $teamMember) {
+                    $user = $teamMember->getUser();
+                    $userId = $user->getId();
+                    
+                    // Avoid duplicates
+                    if (in_array($userId, $userIdsAdded)) {
+                        continue;
+                    }
+                    
+                    $userIdsAdded[] = $userId;
+                    $eligiblePeople[] = [
+                        'user' => $user->toArray(),
+                        'source' => [
+                            'type' => 'parent_team',
+                            'id' => $parentTeam->getId(),
+                            'name' => $parentTeam->getName()
+                        ],
+                        'role' => $teamMember->getRole()
+                    ];
+                }
+                
+                $parentTeam = $parentTeam->getParentTeam();
+            }
+        }
+        
+        return $eligiblePeople;
     }
+    
 }

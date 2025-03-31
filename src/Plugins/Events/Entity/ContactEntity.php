@@ -5,7 +5,6 @@ namespace App\Plugins\Events\Entity;
 use Doctrine\ORM\Mapping as ORM;
 use DateTime;
 use DateTimeInterface;
-use App\Plugins\Account\Entity\UserEntity;
 
 #[ORM\Entity]
 #[ORM\Table(name: "contacts")]
@@ -26,19 +25,13 @@ class ContactEntity
     #[ORM\Column(name: "phone", type: "string", length: 50, nullable: true)]
     private ?string $phone = null;
     
-    #[ORM\ManyToOne(targetEntity: UserEntity::class)]
-    #[ORM\JoinColumn(name: "last_assignee_id", referencedColumnName: "id", nullable: true)]
-    private ?UserEntity $lastAssignee = null;
-    
     #[ORM\ManyToOne(targetEntity: EventEntity::class)]
-    #[ORM\JoinColumn(name: "last_event_id", referencedColumnName: "id", nullable: true)]
-    private ?EventEntity $lastEvent = null;
+    #[ORM\JoinColumn(name: "event_id", referencedColumnName: "id", nullable: true)]
+    private ?EventEntity $event = null;
     
-    #[ORM\Column(name: "last_interaction", type: "datetime", nullable: true)]
-    private ?DateTimeInterface $lastInteraction = null;
-    
-    #[ORM\Column(name: "notes", type: "text", nullable: true)]
-    private ?string $notes = null;
+    #[ORM\ManyToOne(targetEntity: EventBookingEntity::class)]
+    #[ORM\JoinColumn(name: "booking_id", referencedColumnName: "id", nullable: true)]
+    private ?EventBookingEntity $booking = null;
 
     #[ORM\Column(name: "updated", type: "datetime", nullable: false, options: ["default" => "CURRENT_TIMESTAMP"])]
     private DateTimeInterface $updated;
@@ -90,47 +83,25 @@ class ContactEntity
         return $this;
     }
     
-    public function getLastAssignee(): ?UserEntity
+    public function getEvent(): ?EventEntity
     {
-        return $this->lastAssignee;
+        return $this->event;
     }
     
-    public function setLastAssignee(?UserEntity $lastAssignee): self
+    public function setEvent(?EventEntity $event): self
     {
-        $this->lastAssignee = $lastAssignee;
+        $this->event = $event;
         return $this;
     }
     
-    public function getLastEvent(): ?EventEntity
+    public function getBooking(): ?EventBookingEntity
     {
-        return $this->lastEvent;
+        return $this->booking;
     }
     
-    public function setLastEvent(?EventEntity $lastEvent): self
+    public function setBooking(?EventBookingEntity $booking): self
     {
-        $this->lastEvent = $lastEvent;
-        return $this;
-    }
-    
-    public function getLastInteraction(): ?DateTimeInterface
-    {
-        return $this->lastInteraction;
-    }
-    
-    public function setLastInteraction(?DateTimeInterface $lastInteraction): self
-    {
-        $this->lastInteraction = $lastInteraction;
-        return $this;
-    }
-    
-    public function getNotes(): ?string
-    {
-        return $this->notes;
-    }
-    
-    public function setNotes(?string $notes): self
-    {
-        $this->notes = $notes;
+        $this->booking = $booking;
         return $this;
     }
 
@@ -157,21 +128,16 @@ class ContactEntity
             'name' => $this->getName(),
             'email' => $this->getEmail(),
             'phone' => $this->getPhone(),
-            'notes' => $this->getNotes(),
             'updated' => $this->getUpdated()->format('Y-m-d H:i:s'),
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),
         ];
         
-        if ($this->getLastAssignee()) {
-            $data['last_assignee'] = $this->getLastAssignee()->toArray();
+        if ($this->getEvent()) {
+            $data['event_id'] = $this->getEvent()->getId();
         }
         
-        if ($this->getLastEvent()) {
-            $data['last_event_id'] = $this->getLastEvent()->getId();
-        }
-        
-        if ($this->getLastInteraction()) {
-            $data['last_interaction'] = $this->getLastInteraction()->format('Y-m-d H:i:s');
+        if ($this->getBooking()) {
+            $data['booking_id'] = $this->getBooking()->getId();
         }
         
         return $data;
