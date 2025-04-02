@@ -216,6 +216,16 @@ class EventController extends AbstractController
             $eventData['form_fields'] = array_map(function($field) {
                 return $field->toArray();
             }, $formFields);
+
+
+            // availability and acceptance (fixed hosts)
+            if (!isset($data['availability_type'])) {
+                $data['availability_type'] = 'one_host_available';
+            }
+            
+            if (!isset($data['acceptance_required'])) {
+                $data['acceptance_required'] = false;
+            }
             
             
             // Add assignees
@@ -293,6 +303,16 @@ class EventController extends AbstractController
             $eventData['form_fields'] = array_map(function($field) {
                 return $field->toArray();
             }, $formFields);
+
+
+            // availability and acceptance (fixed hosts)
+            if (isset($data['availability_type']) && !in_array($data['availability_type'], ['one_host_available', 'all_hosts_available'])) {
+                return $this->responseService->json(false, 'Invalid availability type.', null, 400);
+            }
+            
+            if (isset($data['acceptance_required']) && !is_bool($data['acceptance_required'])) {
+                $data['acceptance_required'] = (bool)$data['acceptance_required'];
+            }
             
             
             // Add assignees
@@ -460,7 +480,8 @@ class EventController extends AbstractController
             
             // Get event by slug and organization
             $event = $this->eventService->getEventBySlug($event_slug, null, $organization);
-            
+
+
             if (!$event || $event->isDeleted()) {
                 return $this->responseService->json(false, 'not-found', null, 404);
             }
@@ -480,7 +501,7 @@ class EventController extends AbstractController
 
 
 
-    
+
     #[Route('/events/{id}/people', name: 'event_people#', methods: ['GET'], requirements: ['id' => '\d+'])]
     public function getEventPeople(int $id, Request $request): JsonResponse
     {

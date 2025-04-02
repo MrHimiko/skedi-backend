@@ -41,6 +41,12 @@ class EventEntity
     
     #[ORM\Column(name: "schedule", type: "json", nullable: true)]
     private ?array $schedule = null;
+
+    #[ORM\Column(name: "availability_type", type: "string", length: 50, nullable: false, options: ["default" => "one_host_available"])]
+    private string $availabilityType = 'one_host_available';
+
+    #[ORM\Column(name: "acceptance_required", type: "boolean", options: ["default" => false])]
+    private bool $acceptanceRequired = false;
     
     #[ORM\ManyToOne(targetEntity: UserEntity::class)]
     #[ORM\JoinColumn(name: "created_by", referencedColumnName: "id", nullable: false)]
@@ -178,6 +184,30 @@ class EventEntity
         $this->schedule = $schedule;
         return $this;
     }
+
+
+    public function getAvailabilityType(): string
+    {
+        return $this->availabilityType;
+    }
+
+    public function setAvailabilityType(string $availabilityType): self
+    {
+        $this->availabilityType = $availabilityType;
+        return $this;
+    }
+
+    public function isAcceptanceRequired(): bool
+    {
+        return $this->acceptanceRequired;
+    }
+
+    public function setAcceptanceRequired(bool $acceptanceRequired): self
+    {
+        $this->acceptanceRequired = $acceptanceRequired;
+        return $this;
+    }
+
     
     public function getCreatedBy(): UserEntity
     {
@@ -226,6 +256,8 @@ class EventEntity
             'duration' => $this->getDuration(),
             'description' => $this->getDescription(),
             'schedule' => $this->getSchedule(),
+            'availabilityType' => $this->getAvailabilityType(),
+            'acceptanceRequired' => $this->isAcceptanceRequired(),
             'organization_id' => $this->getOrganization()->getId(),
             'created_by' => $this->getCreatedBy()->getId(),
             'deleted' => $this->isDeleted(),

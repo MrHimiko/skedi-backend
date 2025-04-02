@@ -17,6 +17,8 @@ class EventAssigneeEntity
     #[ORM\Column(name: "id", type: "bigint")]
     private int $id;
 
+    
+
     #[ORM\ManyToOne(targetEntity: EventEntity::class)]
     #[ORM\JoinColumn(name: "event_id", referencedColumnName: "id", nullable: false, onDelete: "CASCADE")]
     private EventEntity $event;
@@ -28,9 +30,6 @@ class EventAssigneeEntity
     #[ORM\Column(name: "role", type: "string", length: 50, nullable: false, options: ["default" => "member"])]
     private string $role = 'member';
 
-    #[ORM\ManyToOne(targetEntity: UserEntity::class)]
-    #[ORM\JoinColumn(name: "assigned_by", referencedColumnName: "id", nullable: false)]
-    private UserEntity $assignedBy;
 
     #[ORM\Column(name: "updated", type: "datetime", nullable: false, options: ["default" => "CURRENT_TIMESTAMP"])]
     private DateTimeInterface $updated;
@@ -71,16 +70,7 @@ class EventAssigneeEntity
         return $this;
     }
     
-    public function getAssignedBy(): UserEntity
-    {
-        return $this->assignedBy;
-    }
-    
-    public function setAssignedBy(UserEntity $assignedBy): self
-    {
-        $this->assignedBy = $assignedBy;
-        return $this;
-    }
+
 
     public function getUpdated(): DateTimeInterface
     {
@@ -117,7 +107,6 @@ class EventAssigneeEntity
             'event_id' => $this->getEvent()->getId(),
             'user' => $this->getUser()->toArray(),
             'role' => $this->getRole(),
-            'assigned_by' => $this->getAssignedBy()->toArray(),
             'updated' => $this->getUpdated()->format('Y-m-d H:i:s'),
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),
         ];

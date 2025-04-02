@@ -85,12 +85,6 @@ class EventAssigneeService
             $assignee->setUser($user);
             $assignee->setRole($data['role'] ?? 'member');
             
-            if (!empty($data['assigned_by_id'])) {
-                $assignedBy = $this->entityManager->getRepository(UserEntity::class)->find($data['assigned_by_id']);
-                if ($assignedBy) {
-                    $assignee->setAssignedBy($assignedBy);
-                }
-            }
             
             $this->entityManager->persist($assignee);
             $this->entityManager->flush();
@@ -147,118 +141,36 @@ class EventAssigneeService
         ]);
     }
     
-    public function addMultipleAssignees(EventEntity $event, array $userIds, ?UserEntity $assignedBy = null, string $role = 'member'): void
+    public function updateEventAssignees(EventEntity $event, array $assigneesData): array
     {
         try {
-            foreach ($userIds as $userId) {
-                $user = $this->entityManager->getRepository(UserEntity::class)->find($userId);
-                if (!$user) {
-                    continue; // Skip invalid users
-                }
-                
-                // Check if user is already an assignee
-                $existingAssignee = $this->assigneeRepository->findOneBy([
-                    'event' => $event,
-                    'user' => $user
-                ]);
-                
-                if (!$existingAssignee) {
-                    $assignee = new EventAssigneeEntity();
-                    $assignee->setEvent($event);
-                    $assignee->setUser($user);
-                    $assignee->setRole($role);
-                    
-                    if ($assignedBy) {
-                        $assignee->setAssignedBy($assignedBy);
-                    } else if ($event->getCreatedBy()) {
-                        $assignee->setAssignedBy($event->getCreatedBy());
-                    }
-                    
-                    $this->entityManager->persist($assignee);
-                }
-            }
+            // Start transaction for data integrity
+            $this->entityManager->beginTransaction();
             
-            $this->entityManager->flush();
-        } catch (\Exception $e) {
-            throw new EventsException($e->getMessage());
-        }
-    }
-    
-    public function removeMultipleAssignees(EventEntity $event, array $userIds): void
-    {
-        try {
-            foreach ($userIds as $userId) {
-                $assignee = $this->assigneeRepository->findOneBy([
-                    'event' => $event,
-                    'user' => $userId
-                ]);
-                
-                if ($assignee && $assignee->getRole() !== 'creator') {
-                    $this->entityManager->remove($assignee);
-                }
-            }
+            // For debugging, log the incoming data
+            error_log('Assignees data: ' . json_encode($assigneesData));
             
-            $this->entityManager->flush();
-        } catch (\Exception $e) {
-            throw new EventsException($e->getMessage());
-        }
-    }
-    
-    public function updateEventAssignees(EventEntity $event, array $assigneesData, UserEntity $currentUser): array
-    {
-        try {
-            // Get existing assignees
+            // 1. First delete ALL existing assignees
             $existingAssignees = $this->assigneeRepository->findBy(['event' => $event]);
-            
-            // Create a map of existing user IDs for quick lookup
-            $existingUserIds = [];
             foreach ($existingAssignees as $existingAssignee) {
-                $existingUserIds[$existingAssignee->getUser()->getId()] = $existingAssignee;
+                $this->entityManager->remove($existingAssignee);
             }
+            $this->entityManager->flush();
             
-            // Track creator assignee to ensure it's not removed
-            $creatorAssignee = null;
-            foreach ($existingAssignees as $assignee) {
-                if ($assignee->getRole() === 'creator') {
-                    $creatorAssignee = $assignee;
-                    break;
-                }
-            }
-            
-            if (!$creatorAssignee) {
-                throw new EventsException('Event creator assignee not found.');
-            }
-            
-            // Track which user IDs to keep
-            $userIdsToKeep = [$creatorAssignee->getUser()->getId()];
-            
-            // Process assignees data
-            foreach ($assigneesData as $assigneeData) {
-                if (empty($assigneeData['user_id'])) {
-                    throw new EventsException('User ID is required for each assignee.');
-                }
-                
-                $userId = (int)$assigneeData['user_id'];
-                $role = $assigneeData['role'] ?? 'member';
-                
-                if (!in_array($role, ['admin', 'host', 'member'])) {
-                    throw new EventsException("Invalid role: {$role}");
-                }
-                
-                // Skip if it's the creator
-                if ($userId === $creatorAssignee->getUser()->getId()) {
-                    continue;
-                }
-                
-                $userIdsToKeep[] = $userId;
-                
-                // Update existing assignee or add new one
-                if (isset($existingUserIds[$userId])) {
-                    if ($existingUserIds[$userId]->getRole() !== $role) {
-                        $existingUserIds[$userId]->setRole($role);
-                        $this->entityManager->persist($existingUserIds[$userId]);
+            // 2. Add the new assignees
+            if (!empty($assigneesData)) {
+                foreach ($assigneesData as $assigneeData) {
+                    if (empty($assigneeData['user_id'])) {
+                        throw new EventsException('User ID is required for each assignee.');
                     }
-                } else {
+                    
+                    $userId = (int)$assigneeData['user_id'];
+                    $role = $assigneeData['role'] ?? 'member';
+                    
+                    if (!in_array($role, ['creator', 'admin', 'host', 'member'])) {
+                        throw new EventsException("Invalid role: {$role}");
+                    }
+                    
                     $user = $this->entityManager->getRepository(UserEntity::class)->find($userId);
                     if (!$user) {
                         throw new EventsException("User with ID {$userId} not found.");
@@ -267,28 +179,30 @@ class EventAssigneeService
                     $assignee = new EventAssigneeEntity();
                     $assignee->setEvent($event);
                     $assignee->setUser($user);
-                    $assignee->setAssignedBy($currentUser);
                     $assignee->setRole($role);
+                    
                     $this->entityManager->persist($assignee);
                 }
             }
             
-            // Remove assignees that aren't in the new list (except creator)
-            foreach ($existingAssignees as $existingAssignee) {
-                $userId = $existingAssignee->getUser()->getId();
-                if (!in_array($userId, $userIdsToKeep) && $existingAssignee->getRole() !== 'creator') {
-                    $this->entityManager->remove($existingAssignee);
-                }
-            }
-            
             $this->entityManager->flush();
+            $this->entityManager->commit();
             
+            // Return the new assignees
             return array_map(
                 fn($assignee) => $assignee->toArray(),
                 $this->assigneeRepository->findBy(['event' => $event])
             );
         } catch (\Exception $e) {
+            // Rollback on any error
+            if ($this->entityManager->getConnection()->isTransactionActive()) {
+                $this->entityManager->rollback();
+            }
+            error_log('Error updating assignees: ' . $e->getMessage());
             throw new EventsException($e->getMessage());
         }
     }
+
+
+    
 }

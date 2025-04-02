@@ -257,14 +257,19 @@ class EventScheduleService
         
         // Get the day of the week
         $dayOfWeek = strtolower($date->format('l'));
+
+     
         
         // Get the event schedule
         $schedule = $this->getScheduleForEvent($event);
+
         
         // Check if this day is enabled
         if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
             return []; // No schedule for this day
         }
+
+        
         
         // Extract schedule times
         $scheduleStartTime = clone $date;

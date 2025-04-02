@@ -70,6 +70,90 @@ class EventAssigneeController extends AbstractController
         }
     }
 
+
+    #[Route('/events/{id}/assignees', name: 'event_assignees_post#', methods: ['POST'], requirements: ['id' => '\d+'])]
+    public function setEventAssignees(int $id, Request $request): JsonResponse
+    {
+        $user = $request->attributes->get('user');
+        $data = $request->attributes->get('data');
+        $organization_id = $request->query->get('organization_id');
+        
+        try {
+            // Validation checks
+            if (!$organization_id) {
+                return $this->responseService->json(false, 'Organization ID is required.');
+            }
+            
+            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
+                return $this->responseService->json(false, 'Organization was not found.');
+            }
+            
+            if (!$event = $this->eventService->getEventByIdAndOrganization($id, $organization->entity)) {
+                return $this->responseService->json(false, 'Event was not found.');
+            }
+            
+            // Verify permission
+            $currentUserAssignee = $this->assigneeService->getAssigneeByEventAndUser($event, $user);
+            if (!$currentUserAssignee || !in_array($currentUserAssignee->getRole(), ['creator', 'admin'])) {
+                return $this->responseService->json(false, 'You do not have permission to manage event assignees.');
+            }
+            
+            // Extract event settings if provided
+            $assigneesData = $data['assignees'];
+
+
+            // Validate assignees data
+            if (!is_array($assigneesData)) {
+                return $this->responseService->json(false, 'Invalid data format. Expected array of assignees.');
+            }
+            
+            // Update assignees
+            $assigneeResult = $this->assigneeService->updateEventAssignees($event, $assigneesData);
+            
+            // Update event settings if provided
+            
+            $eventUpdateData = [];
+            
+            if (isset($data['availabilityType'])) {
+                if (in_array($data['availabilityType'], [
+                    'one_host_available', 
+                    'all_hosts_available'
+                ])) {
+                    $eventUpdateData['availabilityType'] = $data['availabilityType'];
+                }
+            }
+            
+            if (isset($data['acceptanceRequired'])) {
+                $eventUpdateData['acceptanceRequired'] = (bool)$data['acceptanceRequired'];
+            }
+            
+
+            if (!empty($eventUpdateData)) {
+                $eventUpdateData['organization_id'] = (int)$organization_id;
+                $this->eventService->update($event, $eventUpdateData);
+            }
+            
+
+            
+            // Prepare response
+            $result = [
+                'assignees' => $assigneeResult,
+                'event' => [
+                    'id' => $event->getId(),
+                    'availabilityType' => $event->getAvailabilityType(),
+                    'acceptanceRequired' => $event->isAcceptanceRequired()
+                ]
+            ];
+            
+            return $this->responseService->json(true, 'Event assignees updated successfully.', $result);
+        } catch (EventsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, $e, null, 500);
+        }
+    }
+    
+
     #[Route('/events/{event_id}/assignees/{assignee_id}', name: 'event_assignee_remove#', methods: ['DELETE'], requirements: ['event_id' => '\d+', 'assignee_id' => '\d+'])]
     public function removeEventAssignee(int $event_id, int $assignee_id, Request $request): JsonResponse
     {

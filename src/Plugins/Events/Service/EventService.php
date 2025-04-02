@@ -116,6 +116,12 @@ class EventService
                 'schedule' => new Assert\Optional([
                     new Assert\Type('array')
                 ]),
+                'availability_type' => new Assert\Optional([
+                    new Assert\Choice(['choices' => ['one_host_available', 'all_hosts_available']])
+                ]),
+                'acceptance_required' => new Assert\Optional([
+                    new Assert\Type('bool')
+                ]),
             ];
             
             $transform = [
@@ -140,7 +146,6 @@ class EventService
             $creatorAssignee = new EventAssigneeEntity();
             $creatorAssignee->setEvent($event);
             $creatorAssignee->setUser($event->getCreatedBy());
-            $creatorAssignee->setAssignedBy($event->getCreatedBy());
             $creatorAssignee->setRole('creator'); // Set role to creator
             $this->entityManager->persist($creatorAssignee);
             $this->entityManager->flush();
@@ -178,7 +183,7 @@ class EventService
             unset($data['time_slots']);
             unset($data['form_fields']);
             unset($data['booking_options']);
-            unset($data['team']); // Remove 'team' if it exists
+            unset($data['team']); 
             
             // Handle slug updates
             if (!empty($data['slug']) || (!isset($data['slug']) && !empty($data['name']))) {
@@ -188,6 +193,8 @@ class EventService
                 
                 $data['slug'] = $this->slugService->generateSlug($data['slug']);
             }
+
+            
             
             $constraints = [
                 'name' => new Assert\Optional([
@@ -219,6 +226,12 @@ class EventService
                 'organization_id' => [
                     new Assert\Type('integer') 
                 ],
+                'availabilityType' => new Assert\Optional([
+                    new Assert\Choice(['choices' => ['one_host_available', 'all_hosts_available']])
+                ]),
+                'acceptanceRequired' => new Assert\Optional([
+                    new Assert\Type('bool')
+                ]),
             ];
             
             $transform = [
@@ -236,9 +249,12 @@ class EventService
                     return null;
                 },
             ];
+
             
-            $this->crudManager->update($event, $data, $constraints, $transform);
-            
+
+            $result = $this->crudManager->update($event, $data, $constraints, $transform);
+
+    
             // Update assignees if provided
             if ($assignees !== null && is_array($assignees)) {
                 // Get existing assignees
@@ -269,7 +285,6 @@ class EventService
                         $assignee = new EventAssigneeEntity();
                         $assignee->setEvent($event);
                         $assignee->setUser($user);
-                        $assignee->setAssignedBy($event->getCreatedBy());
                         $this->entityManager->persist($assignee);
                     }
                 }
