@@ -4,18 +4,24 @@ namespace App\Plugins\Events\Service;
 
 use Doctrine\ORM\EntityManagerInterface;
 use App\Plugins\Events\Entity\EventEntity;
+use App\Plugins\Events\Entity\EventBookingEntity;
 use App\Plugins\Events\Exception\EventsException;
+use App\Service\CrudManager;
+use App\Exception\CrudException;
 use DateTimeInterface;
 use DateTime;
 
 class EventScheduleService
 {
     private EntityManagerInterface $entityManager;
+    private CrudManager $crudManager;
 
     public function __construct(
-        EntityManagerInterface $entityManager
+        EntityManagerInterface $entityManager,
+        CrudManager $crudManager
     ) {
         $this->entityManager = $entityManager;
+        $this->crudManager = $crudManager;
     }
 
     /**
@@ -198,13 +204,26 @@ class EventScheduleService
         
         return $validatedSchedule;
     }
-/**
-     * Check if a specific time slot is available based on the schedule
+
+    /**
+     * Check if a specific time slot is available based on the schedule (timezone-aware)
      */
-    public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime): bool
+    public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime, ?string $clientTimezone = null): bool
     {
+        // Ensure the dates are in UTC for internal processing
+        $startUtc = clone $startDateTime;
+        $endUtc = clone $endDateTime;
+        
+        if ($startDateTime->getTimezone()->getName() !== 'UTC') {
+            $startUtc->setTimezone(new \DateTimeZone('UTC'));
+        }
+        
+        if ($endDateTime->getTimezone()->getName() !== 'UTC') {
+            $endUtc->setTimezone(new \DateTimeZone('UTC'));
+        }
+        
         // Get the day of the week
-        $dayOfWeek = strtolower($startDateTime->format('l'));
+        $dayOfWeek = strtolower($startUtc->format('l'));
         
         // Get the event schedule
         $schedule = $this->getScheduleForEvent($event);
@@ -215,8 +234,8 @@ class EventScheduleService
         }
         
         // Extract just the time component for comparison
-        $startTime = $startDateTime->format('H:i:s');
-        $endTime = $endDateTime->format('H:i:s');
+        $startTime = $startUtc->format('H:i:s');
+        $endTime = $endUtc->format('H:i:s');
         
         // Check if within working hours
         $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
@@ -242,131 +261,321 @@ class EventScheduleService
         
         return true; // Available
     }
-    
+
+
     
     /**
-     * Get available time slots for a day based on the schedule
+     * Get available time slots for a day based on the schedule and existing bookings with timezone support
      */
-    public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, ?int $durationMinutes = null): array
-    {   
-
+     public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, ?int $durationMinutes = null, ?string $clientTimezone = null): array
+    {
+        // Set default timezone if not provided
+        if (!$clientTimezone) {
+            $clientTimezone = 'UTC';
+        }
+        
+        try {
+            // Validate timezone
+            new \DateTimeZone($clientTimezone);
+        } catch (\Exception $e) {
+            // Default to UTC if invalid timezone
+            $clientTimezone = 'UTC';
+        }
+        
+        // Default to first duration option if not specified
         if ($durationMinutes === null) {
             $durations = $event->getDuration();
             $durationMinutes = isset($durations[0]['duration']) ? (int)$durations[0]['duration'] : 30;
         }
-        
-        // Get the day of the week
-        $dayOfWeek = strtolower($date->format('l'));
 
-     
-        
-        // Get the event schedule
-        $schedule = $this->getScheduleForEvent($event);
-
-        
-        // Check if this day is enabled
-        if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
-            return []; // No schedule for this day
-        }
-
-        
-        
-        // Extract schedule times
-        $scheduleStartTime = clone $date;
-        list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
-        $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
-        
-        $scheduleEndTime = clone $date;
-        list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
-        $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
-        
-        // Convert breaks to DateTime objects
-        $breaks = [];
-        foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
-            $breakStart = clone $date;
-            list($hours, $minutes, $seconds) = explode(':', $break['start_time']);
-            $breakStart->setTime((int)$hours, (int)$minutes, (int)$seconds);
-            
-            $breakEnd = clone $date;
-            list($hours, $minutes, $seconds) = explode(':', $break['end_time']);
-            $breakEnd->setTime((int)$hours, (int)$minutes, (int)$seconds);
-            
-            $breaks[] = [
-                'start' => $breakStart,
-                'end' => $breakEnd
-            ];
+        // Create client date objects for the requested date
+        $clientDate = clone $date;
+        if ($date->getTimezone()->getName() !== $clientTimezone) {
+            $clientDate->setTimezone(new \DateTimeZone($clientTimezone));
         }
         
-        // Generate time slots
-        $timeSlots = [];
-        $slotStart = clone $scheduleStartTime;
-        $slotDuration = new \DateInterval('PT' . $durationMinutes . 'M');
+        // Reset to midnight in client timezone
+        $clientStartOfDay = clone $clientDate;
+        $clientStartOfDay->setTime(0, 0, 0);
         
-        while ($slotStart < $scheduleEndTime) {
-            $slotEnd = clone $slotStart;
-            $slotEnd->add($slotDuration);
+        $clientEndOfDay = clone $clientDate;
+        $clientEndOfDay->setTime(23, 59, 59);
+        
+        // Convert to UTC for processing - these define our search window
+        $utcStartOfClientDay = clone $clientStartOfDay;
+        $utcStartOfClientDay->setTimezone(new \DateTimeZone('UTC'));
+        
+        $utcEndOfClientDay = clone $clientEndOfDay;
+        $utcEndOfClientDay->setTimezone(new \DateTimeZone('UTC'));
+        
+        // Get dates that need to be checked in UTC (could span up to 2 days)
+        $datesToCheck = [];
+        
+        // Get the day of the week for the start date in UTC
+        $currentDayCheck = clone $utcStartOfClientDay;
+        $currentDayCheck->setTime(0, 0, 0); // Reset to start of the UTC day
+        
+        // Add the full UTC days that intersect with the client's requested day
+        while ($currentDayCheck <= $utcEndOfClientDay) {
+            $datesToCheck[] = clone $currentDayCheck;
+            $currentDayCheck->modify('+1 day');
+        }
+        
+        $allSlots = [];
+        
+        // Process each UTC day that overlaps with the requested client day
+        foreach ($datesToCheck as $utcDayToCheck) {
+            $dayOfWeek = strtolower($utcDayToCheck->format('l'));
+            $schedule = $this->getScheduleForEvent($event);
             
-            // If slot end is after schedule end, break the loop
-            if ($slotEnd > $scheduleEndTime) {
-                break;
+            // Skip if day is not enabled in schedule
+            if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+                continue;
             }
             
-            // Check for conflicts with breaks
-            $hasConflict = false;
-            foreach ($breaks as $break) {
-                if (
-                    ($slotStart < $break['end'] && $slotEnd > $break['start']) ||
-                    ($slotStart <= $break['start'] && $slotEnd >= $break['end'])
-                ) {
-                    $hasConflict = true;
-                    break;
-                }
-            }
+            // Extract schedule times for this UTC day
+            $scheduleStartTime = clone $utcDayToCheck;
+            list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
+            $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
             
-            if (!$hasConflict) {
-                $timeSlots[] = [
-                    'start' => $slotStart->format('Y-m-d H:i:s'),
-                    'end' => $slotEnd->format('Y-m-d H:i:s')
+            $scheduleEndTime = clone $utcDayToCheck;
+            list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
+            $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
+            
+            // Convert breaks to DateTime objects
+            $breaks = [];
+            foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
+                $breakStart = clone $utcDayToCheck;
+                list($hours, $minutes, $seconds) = explode(':', $break['start_time']);
+                $breakStart->setTime((int)$hours, (int)$minutes, (int)$seconds);
+                
+                $breakEnd = clone $utcDayToCheck;
+                list($hours, $minutes, $seconds) = explode(':', $break['end_time']);
+                $breakEnd->setTime((int)$hours, (int)$minutes, (int)$seconds);
+                
+                $breaks[] = [
+                    'start' => $breakStart,
+                    'end' => $breakEnd
                 ];
             }
             
-            // Move to next slot
-            $slotStart->add($slotDuration);
+            // Get existing bookings for this UTC day
+            $existingBookings = $this->getEventBookingsForDate($event, $utcDayToCheck);
+            
+            // Generate time slots in 15-minute increments
+            $slotStart = clone $scheduleStartTime;
+            $slotIncrement = new \DateInterval('PT15M'); // 15-min increments
+            $eventDuration = new \DateInterval('PT' . $durationMinutes . 'M');
+            
+            while ($slotStart < $scheduleEndTime) {
+                $slotEnd = clone $slotStart;
+                $slotEnd->add($eventDuration);
+                
+                // If slot end is after schedule end, break
+                if ($slotEnd > $scheduleEndTime) {
+                    break;
+                }
+                
+                // Check for conflicts
+                $hasConflict = false;
+                
+                // Check breaks
+                foreach ($breaks as $break) {
+                    if ($slotStart < $break['end'] && $slotEnd > $break['start']) {
+                        $hasConflict = true;
+                        break;
+                    }
+                }
+                
+                // Check bookings
+                if (!$hasConflict) {
+                    foreach ($existingBookings as $booking) {
+                        if ($slotStart < $booking['end'] && $slotEnd > $booking['start']) {
+                            $hasConflict = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!$hasConflict) {
+                    // Create client-timezone versions of slot times
+                    $clientSlotStart = clone $slotStart;
+                    $clientSlotStart->setTimezone(new \DateTimeZone($clientTimezone));
+                    
+                    $clientSlotEnd = clone $slotEnd;
+                    $clientSlotEnd->setTimezone(new \DateTimeZone($clientTimezone));
+                    
+                    // Check if this slot's START time falls within the requested client day
+                    // This is the key change - we ONLY care about the start time now
+                    if ($clientSlotStart->format('Y-m-d') === $clientDate->format('Y-m-d')) {
+                        $allSlots[] = [
+                            'start' => $slotStart->format('Y-m-d H:i:s'),
+                            'end' => $slotEnd->format('Y-m-d H:i:s'),
+                            'start_client' => $clientSlotStart->format('Y-m-d H:i:s'),
+                            'end_client' => $clientSlotEnd->format('Y-m-d H:i:s'),
+                            'timezone' => $clientTimezone
+                        ];
+                    }
+                }
+                
+                // Move to next slot
+                $slotStart->add($slotIncrement);
+            }
         }
         
-        return $timeSlots;
+        return $allSlots;
     }
-    
+
     /**
-     * Get available dates within a range based on the event schedule
+     * Get available dates within a range based on the event schedule with timezone support
      */
-    public function getAvailableDates(EventEntity $event, \DateTimeInterface $startDate, \DateTimeInterface $endDate): array
+    public function getAvailableDates(EventEntity $event, \DateTimeInterface $startDate, \DateTimeInterface $endDate, ?string $clientTimezone = null): array
     {
+        // Set default timezone if not provided
+        if (!$clientTimezone) {
+            $clientTimezone = 'UTC';
+        }
+        
+        try {
+            // Validate timezone
+            new \DateTimeZone($clientTimezone);
+        } catch (\Exception $e) {
+            // Default to UTC if invalid timezone
+            $clientTimezone = 'UTC';
+        }
+        
         // Get the event schedule
         $schedule = $this->getScheduleForEvent($event);
         
-        // Create a map of enabled days
-        $enabledDays = [];
-        foreach ($schedule as $day => $dayData) {
-            if ($dayData['enabled']) {
-                $enabledDays[$day] = true;
-            }
-        }
+        // Extend range by one day in each direction to account for timezone differences
+        $expandedStartDate = clone $startDate;
+        $expandedStartDate->modify('-1 day');
         
-        // Generate list of available dates
-        $availableDates = [];
-        $currentDate = clone $startDate;
+        $expandedEndDate = clone $endDate;
+        $expandedEndDate->modify('+1 day');
         
-        while ($currentDate <= $endDate) {
-            $dayOfWeek = strtolower($currentDate->format('l'));
-            
-            if (isset($enabledDays[$dayOfWeek])) {
-                $availableDates[] = $currentDate->format('Y-m-d');
-            }
-            
+        // Generate list of dates to check in UTC
+        $datesToCheck = [];
+        $currentDate = clone $expandedStartDate;
+        
+        while ($currentDate <= $expandedEndDate) {
+            $datesToCheck[] = clone $currentDate;
             $currentDate->modify('+1 day');
         }
         
-        return $availableDates;
+        // Map to hold available dates in client timezone
+        $availableDatesMap = [];
+        
+        // Check each date
+        foreach ($datesToCheck as $utcDate) {
+            $dayOfWeek = strtolower($utcDate->format('l'));
+            
+            // Skip if day is not enabled in schedule
+            if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+                continue;
+            }
+            
+            // Create client timezone version of this date
+            $clientDate = clone $utcDate;
+            $clientDate->setTimezone(new \DateTimeZone($clientTimezone));
+            $clientDateStr = $clientDate->format('Y-m-d');
+            
+            // Only include if it falls within the original requested range in client timezone
+            $clientStartStr = $startDate->setTimezone(new \DateTimeZone($clientTimezone))->format('Y-m-d');
+            $clientEndStr = $endDate->setTimezone(new \DateTimeZone($clientTimezone))->format('Y-m-d');
+            
+            if ($clientDateStr >= $clientStartStr && $clientDateStr <= $clientEndStr) {
+                // Extract schedule times
+                $scheduleStartTime = clone $utcDate;
+                list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
+                $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
+                
+                $scheduleEndTime = clone $utcDate;
+                list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
+                $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
+                
+                // Convert to client timezone for display
+                $clientStartTime = clone $scheduleStartTime;
+                $clientStartTime->setTimezone(new \DateTimeZone($clientTimezone));
+                
+                $clientEndTime = clone $scheduleEndTime;
+                $clientEndTime->setTimezone(new \DateTimeZone($clientTimezone));
+                
+                // Store date with schedule information
+                if (!isset($availableDatesMap[$clientDateStr])) {
+                    $availableDatesMap[$clientDateStr] = [
+                        'date' => $clientDateStr,
+                        'day_of_week' => $clientDate->format('l'),
+                        'available_blocks' => []
+                    ];
+                }
+                
+                // Add this availability block
+                $availableDatesMap[$clientDateStr]['available_blocks'][] = [
+                    'start_time' => $clientStartTime->format('H:i:s'),
+                    'end_time' => $clientEndTime->format('H:i:s'),
+                    'start_utc' => $scheduleStartTime->format('Y-m-d H:i:s'),
+                    'end_utc' => $scheduleEndTime->format('Y-m-d H:i:s')
+                ];
+            }
+        }
+        
+        // Convert map to array for return
+        return array_values($availableDatesMap);
     }
+
+    /**
+     * Get all bookings for a specific event and date
+     */
+    private function getEventBookingsForDate(EventEntity $event, DateTimeInterface $date): array
+    {
+        $startOfDay = clone $date;
+        $startOfDay->setTime(0, 0, 0);
+        
+        $endOfDay = clone $date;
+        $endOfDay->setTime(23, 59, 59);
+        
+        try {
+            // Define filters for the date range
+            $filters = [
+                [
+                    'field' => 'startTime',
+                    'operator' => 'greater_than_or_equal',
+                    'value' => $startOfDay
+                ],
+                [
+                    'field' => 'startTime',
+                    'operator' => 'less_than_or_equal',
+                    'value' => $endOfDay
+                ]
+            ];
+            
+            // Use CrudManager to fetch bookings
+            $bookings = $this->crudManager->findMany(
+                EventBookingEntity::class,
+                $filters,
+                1, 
+                60, 
+                [
+                    'event' => $event,
+                    'cancelled' => false
+                ]
+            );
+            
+            $formattedBookings = [];
+            foreach ($bookings as $booking) {
+                $formattedBookings[] = [
+                    'start' => $booking->getStartTime(),
+                    'end' => $booking->getEndTime()
+                ];
+            }
+            
+            return $formattedBookings;
+        } catch (CrudException $e) {
+            error_log('Error fetching bookings: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+
 }

@@ -70,13 +70,31 @@ class EventBookingService
                 throw new EventsException('Start and end time are required');
             }
             
+            // Handle timezone if provided
+            $timezone = $data['timezone'] ?? 'UTC';
+            try {
+                new \DateTimeZone($timezone);
+            } catch (\Exception $e) {
+                $timezone = 'UTC';
+            }
+            
+            // Convert to UTC timestamps for storage
             $startTime = $data['start_time'] instanceof \DateTimeInterface 
-                ? $data['start_time'] 
-                : new \DateTime($data['start_time']);
-                
+                ? clone $data['start_time'] 
+                : new \DateTime($data['start_time'], new \DateTimeZone($timezone));
+            
             $endTime = $data['end_time'] instanceof \DateTimeInterface 
-                ? $data['end_time'] 
-                : new \DateTime($data['end_time']);
+                ? clone $data['end_time'] 
+                : new \DateTime($data['end_time'], new \DateTimeZone($timezone));
+            
+            // Ensure timestamps are in UTC
+            if ($startTime->getTimezone()->getName() !== 'UTC') {
+                $startTime->setTimezone(new \DateTimeZone('UTC'));
+            }
+            
+            if ($endTime->getTimezone()->getName() !== 'UTC') {
+                $endTime->setTimezone(new \DateTimeZone('UTC'));
+            }
             
             if ($startTime >= $endTime) {
                 throw new EventsException('End time must be after start time');
@@ -94,28 +112,24 @@ class EventBookingService
             $booking->setEndTime($endTime);
             $booking->setStatus('confirmed'); // Default status
             
+            // Store original timezone in form data for reference
+            if (empty($data['form_data']) || !is_array($data['form_data'])) {
+                $data['form_data'] = [];
+            }
+            $data['form_data']['booking_timezone'] = $timezone;
+            
             // Handle duration option selection
             if (isset($data['duration_index']) && is_numeric($data['duration_index'])) {
                 $durations = $event->getDuration();
                 $durationIndex = (int)$data['duration_index'];
                 
                 if (isset($durations[$durationIndex])) {
-                    // Prepare form data if it doesn't exist
-                    if (empty($data['form_data']) || !is_array($data['form_data'])) {
-                        $data['form_data'] = [];
-                    }
-                    
-                    // Store the selected duration option in the form data
                     $data['form_data']['selected_duration'] = $durations[$durationIndex];
                 }
             }
             
-
-            
-            // Save form data if provided
-            if (!empty($data['form_data']) && is_array($data['form_data'])) {
-                $booking->setFormDataFromArray($data['form_data']);
-            }
+            // Save form data
+            $booking->setFormDataFromArray($data['form_data']);
             
             $this->entityManager->persist($booking);
             $this->entityManager->flush();

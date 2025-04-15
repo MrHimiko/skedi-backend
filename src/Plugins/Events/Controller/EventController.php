@@ -358,25 +358,20 @@ class EventController extends AbstractController
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e, null, 500);
         }
-    }
-    
-    #[Route('/events/{id}/available-slots', name: 'events_available_slots#', methods: ['GET'], requirements: ['id' => '\d+'])]
-    public function getAvailableSlots(int $id, Request $request): JsonResponse
+    }   
+
+
+
+    #[Route('/events/{id}/people', name: 'event_people#', methods: ['GET'], requirements: ['id' => '\d+'])]
+    public function getEventPeople(int $id, Request $request): JsonResponse
     {
         $user = $request->attributes->get('user');
         $organization_id = $request->query->get('organization_id');
-        $date = $request->query->get('date');
-        $durationIndex = (int)$request->query->get('duration_index', 0);
         
         try {
             // Check if organization_id is provided
             if (!$organization_id) {
                 return $this->responseService->json(false, 'Organization ID is required.');
-            }
-            
-            // Check if date is provided
-            if (!$date) {
-                return $this->responseService->json(false, 'Date is required.');
             }
             
             // Check if user has access to this organization
@@ -389,36 +384,25 @@ class EventController extends AbstractController
                 return $this->responseService->json(false, 'Event was not found.');
             }
             
-            // Get duration from event
-            $durations = $event->getDuration();
-            $duration = 30; // Default duration
+            // Get all eligible people for this event
+            $people = $this->eventService->getEligiblePeople($event);
             
-            // Get specified duration option if it exists
-            if (isset($durations[$durationIndex]) && isset($durations[$durationIndex]['duration'])) {
-                $duration = (int)$durations[$durationIndex]['duration'];
-            }
-            
-            // Get available slots
-            $dateObj = new \DateTime($date);
-            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $duration);
-            
-            return $this->responseService->json(true, 'Available slots retrieved successfully.', [
-                'slots' => $slots,
-                'duration' => $duration,
-                'duration_index' => $durationIndex,
-                'duration_options' => $durations
-            ]);
+            return $this->responseService->json(true, 'Event eligible people retrieved successfully.', $people);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e, null, 500);
         }
     }
-
-
+    
 
 
     /* PUBLIC ROUTE WITHOUT USER AUTHENTICATION */
+    /* PUBLIC ROUTE WITHOUT USER AUTHENTICATION */
+    /* PUBLIC ROUTE WITHOUT USER AUTHENTICATION */
+    /* PUBLIC ROUTE WITHOUT USER AUTHENTICATION */
+
+
     #[Route('/public/organizations/{org_slug}/events/{event_slug}', name: 'public_event_info', methods: ['GET'])]
     public function getPublicEventInfo(string $org_slug, string $event_slug, Request $request): JsonResponse
     {
@@ -460,11 +444,16 @@ class EventController extends AbstractController
         }
     }
 
+
+
+    
+
     #[Route('/public/organizations/{org_slug}/events/{event_slug}/available-slots', name: 'public_event_available_slots', methods: ['GET'])]
     public function getPublicAvailableSlots(string $org_slug, string $event_slug, Request $request): JsonResponse
     {
         $date = $request->query->get('date');
-        $duration = (int)$request->query->get('duration', 30);
+        $requestedDuration = $request->query->get('duration');
+        $timezone = $request->query->get('timezone', 'UTC');
         
         if (!$date) {
             return $this->responseService->json(false, 'Date parameter is required.', null, 400);
@@ -480,17 +469,53 @@ class EventController extends AbstractController
             
             // Get event by slug and organization
             $event = $this->eventService->getEventBySlug($event_slug, null, $organization);
-
-
+            
             if (!$event || $event->isDeleted()) {
                 return $this->responseService->json(false, 'not-found', null, 404);
             }
             
-            // Get available slots for the specified date
-            $dateObj = new \DateTime($date);
-            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $duration);
+            // Get durations from event
+            $durations = $event->getDuration();
+            $durationMinutes = 30; // Default duration
             
-            return $this->responseService->json(true, 'retrieve', $slots);
+            // If duration is specified in URL, check if it's valid
+            if ($requestedDuration) {
+                $requestedDuration = (int)$requestedDuration;
+                $durationFound = false;
+                
+                // Check if requested duration exists in event durations
+                foreach ($durations as $option) {
+                    if (isset($option['duration']) && (int)$option['duration'] === $requestedDuration) {
+                        $durationMinutes = $requestedDuration;
+                        $durationFound = true;
+                        break;
+                    }
+                }
+                
+                // If not found, use default
+                if (!$durationFound && !empty($durations) && isset($durations[0]['duration'])) {
+                    $durationMinutes = (int)$durations[0]['duration'];
+                }
+            }
+            
+            // Create DateTime object with the client's timezone
+            try {
+                // Validate timezone
+                new \DateTimeZone($timezone);
+            } catch (\Exception $e) {
+                // Default to UTC if invalid timezone
+                $timezone = 'UTC';
+            }
+            
+            // Get available slots for the specified date with timezone support
+            $dateObj = new \DateTime($date, new \DateTimeZone($timezone));
+            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $durationMinutes, $timezone);
+            
+            return $this->responseService->json(true, 'retrieve', [
+                'slots' => $slots,
+                'timezone' => $timezone,
+                'duration' => $durationMinutes
+            ]);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
@@ -500,40 +525,9 @@ class EventController extends AbstractController
 
 
 
+    
 
 
-    #[Route('/events/{id}/people', name: 'event_people#', methods: ['GET'], requirements: ['id' => '\d+'])]
-    public function getEventPeople(int $id, Request $request): JsonResponse
-    {
-        $user = $request->attributes->get('user');
-        $organization_id = $request->query->get('organization_id');
-        
-        try {
-            // Check if organization_id is provided
-            if (!$organization_id) {
-                return $this->responseService->json(false, 'Organization ID is required.');
-            }
-            
-            // Check if user has access to this organization
-            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organization_id, $user)) {
-                return $this->responseService->json(false, 'Organization was not found.');
-            }
-            
-            // Get event by ID ensuring it belongs to the organization
-            if (!$event = $this->eventService->getEventByIdAndOrganization($id, $organization->entity)) {
-                return $this->responseService->json(false, 'Event was not found.');
-            }
-            
-            // Get all eligible people for this event
-            $people = $this->eventService->getEligiblePeople($event);
-            
-            return $this->responseService->json(true, 'Event eligible people retrieved successfully.', $people);
-        } catch (EventsException $e) {
-            return $this->responseService->json(false, $e->getMessage(), null, 400);
-        } catch (\Exception $e) {
-            return $this->responseService->json(false, $e, null, 500);
-        }
-    }
 
 
 }
