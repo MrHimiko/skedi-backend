@@ -5,9 +5,12 @@ namespace App\Plugins\Events\Service;
 use Doctrine\ORM\EntityManagerInterface;
 use App\Plugins\Events\Entity\EventEntity;
 use App\Plugins\Events\Entity\EventBookingEntity;
+use App\Plugins\Events\Entity\EventAssigneeEntity;
 use App\Plugins\Events\Exception\EventsException;
 use App\Service\CrudManager;
 use App\Exception\CrudException;
+use App\Plugins\Account\Service\UserAvailabilityService;
+use App\Plugins\Account\Entity\UserEntity;
 use DateTimeInterface;
 use DateTime;
 
@@ -15,13 +18,16 @@ class EventScheduleService
 {
     private EntityManagerInterface $entityManager;
     private CrudManager $crudManager;
+    private UserAvailabilityService $userAvailabilityService;
 
     public function __construct(
         EntityManagerInterface $entityManager,
-        CrudManager $crudManager
+        CrudManager $crudManager,
+        UserAvailabilityService $userAvailabilityService
     ) {
         $this->entityManager = $entityManager;
         $this->crudManager = $crudManager;
+        $this->userAvailabilityService = $userAvailabilityService;
     }
 
     /**
@@ -262,13 +268,52 @@ class EventScheduleService
         return true; // Available
     }
 
-
-    
     /**
      * Get available time slots for a day based on the schedule and existing bookings with timezone support
      */
-     public function getAvailableTimeSlots(EventEntity $event, DateTimeInterface $date, ?int $durationMinutes = null, ?string $clientTimezone = null): array
-    {
+    public function getAvailableTimeSlots(
+        EventEntity $event, 
+        DateTimeInterface $date, 
+        ?int $durationMinutes = null, 
+        ?string $clientTimezone = null
+    ): array {
+        // Get available slots based on event schedule
+        $slots = $this->getBaseAvailableTimeSlots($event, $date, $durationMinutes, $clientTimezone);
+        
+        // No need to check host availability if there are no slots
+        if (empty($slots)) {
+            return [];
+        }
+        
+        // Get event assignees who are eligible to host
+        $hosts = $this->getEventHosts($event);
+        
+        if (empty($hosts)) {
+            // No hosts assigned yet, return slots as is
+            return $slots;
+        }
+        
+        // Filter slots based on availability rules
+        $availabilityType = $event->getAvailabilityType();
+        
+        if ($availabilityType === 'one_host_available') {
+            // Filter out slots where no hosts are available
+            return $this->filterSlotsByOneHostAvailable($slots, $hosts);
+        } else {
+            // All hosts must be available (more restrictive)
+            return $this->filterSlotsByAllHostsAvailable($slots, $hosts);
+        }
+    }
+    
+    /**
+     * Get base available time slots without checking host availability
+     */
+    private function getBaseAvailableTimeSlots(
+        EventEntity $event, 
+        DateTimeInterface $date, 
+        ?int $durationMinutes = null, 
+        ?string $clientTimezone = null
+    ): array {
         // Set default timezone if not provided
         if (!$clientTimezone) {
             $clientTimezone = 'UTC';
@@ -425,103 +470,269 @@ class EventScheduleService
         
         return $allSlots;
     }
+    
+    /**
+     * Filter time slots where at least one host is available
+     */
+    private function filterSlotsByOneHostAvailable(array $slots, array $hosts): array
+    {
+        $availableSlots = [];
+        
+        foreach ($slots as $slot) {
+            $startTime = new DateTime($slot['start']);
+            $endTime = new DateTime($slot['end']);
+            
+            // Check if at least one host is available for this slot
+            foreach ($hosts as $host) {
+                if ($this->userAvailabilityService->isUserAvailable($host, $startTime, $endTime)) {
+                    $availableSlots[] = $slot;
+                    break; // One available host is enough
+                }
+            }
+        }
+        
+        return $availableSlots;
+    }
+    
+    /**
+     * Filter time slots where all hosts are available
+     */
+    private function filterSlotsByAllHostsAvailable(array $slots, array $hosts): array
+    {
+        $availableSlots = [];
+        
+        foreach ($slots as $slot) {
+            $startTime = new DateTime($slot['start']);
+            $endTime = new DateTime($slot['end']);
+            
+            $allAvailable = true;
+            
+            // Check if all hosts are available for this slot
+            foreach ($hosts as $host) {
+                if (!$this->userAvailabilityService->isUserAvailable($host, $startTime, $endTime)) {
+                    $allAvailable = false;
+                    break;
+                }
+            }
+            
+            if ($allAvailable) {
+                $availableSlots[] = $slot;
+            }
+        }
+        
+        return $availableSlots;
+    }
+    
+    /**
+     * Get hosts (users who can host the event)
+     */
+    private function getEventHosts(EventEntity $event): array
+    {
+        $assignees = $this->entityManager->getRepository(EventAssigneeEntity::class)
+            ->findBy(['event' => $event]);
+        
+        $hosts = [];
+        
+        foreach ($assignees as $assignee) {
+            // Depending on your role system, you might want to filter by specific roles
+            // Here we assume 'creator', 'admin', and 'host' roles can host events
+            $role = $assignee->getRole();
+            if (in_array($role, ['creator', 'admin', 'host', 'member'])) {
+                $hosts[] = $assignee->getUser();
+            }
+        }
+        
+        return $hosts;
+    }
 
     /**
-     * Get available dates within a range based on the event schedule with timezone support
+     * Handle booking creation to also create availability records
      */
-    public function getAvailableDates(EventEntity $event, \DateTimeInterface $startDate, \DateTimeInterface $endDate, ?string $clientTimezone = null): array
+    public function handleBookingCreated(EventBookingEntity $booking): void
     {
-        // Set default timezone if not provided
-        if (!$clientTimezone) {
-            $clientTimezone = 'UTC';
-        }
-        
         try {
-            // Validate timezone
-            new \DateTimeZone($clientTimezone);
-        } catch (\Exception $e) {
-            // Default to UTC if invalid timezone
-            $clientTimezone = 'UTC';
-        }
-        
-        // Get the event schedule
-        $schedule = $this->getScheduleForEvent($event);
-        
-        // Extend range by one day in each direction to account for timezone differences
-        $expandedStartDate = clone $startDate;
-        $expandedStartDate->modify('-1 day');
-        
-        $expandedEndDate = clone $endDate;
-        $expandedEndDate->modify('+1 day');
-        
-        // Generate list of dates to check in UTC
-        $datesToCheck = [];
-        $currentDate = clone $expandedStartDate;
-        
-        while ($currentDate <= $expandedEndDate) {
-            $datesToCheck[] = clone $currentDate;
-            $currentDate->modify('+1 day');
-        }
-        
-        // Map to hold available dates in client timezone
-        $availableDatesMap = [];
-        
-        // Check each date
-        foreach ($datesToCheck as $utcDate) {
-            $dayOfWeek = strtolower($utcDate->format('l'));
+            $event = $booking->getEvent();
+            $hosts = $this->getEventHosts($event);
             
-            // Skip if day is not enabled in schedule
-            if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
-                continue;
+            foreach ($hosts as $host) {
+                $this->userAvailabilityService->createInternalAvailability(
+                    $host,
+                    $event->getName() . ' - Booking',
+                    $booking->getStartTime(),
+                    $booking->getEndTime(),
+                    $event,
+                    $booking
+                );
             }
+        } catch (\Exception $e) {
+            // Log error but don't fail the booking
+            error_log('Failed to create host availability records: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle booking updates to also update availability records
+    */
+
+    public function handleBookingUpdated(EventBookingEntity $booking): void
+    {
+        try {
+            // Find all availability records for this booking
+            $availabilityRecords = $this->entityManager->getRepository('App\Plugins\Account\Entity\UserAvailabilityEntity')
+                ->findBy([
+                    'booking' => $booking,
+                    'deleted' => false
+                ]);
             
-            // Create client timezone version of this date
-            $clientDate = clone $utcDate;
-            $clientDate->setTimezone(new \DateTimeZone($clientTimezone));
-            $clientDateStr = $clientDate->format('Y-m-d');
-            
-            // Only include if it falls within the original requested range in client timezone
-            $clientStartStr = $startDate->setTimezone(new \DateTimeZone($clientTimezone))->format('Y-m-d');
-            $clientEndStr = $endDate->setTimezone(new \DateTimeZone($clientTimezone))->format('Y-m-d');
-            
-            if ($clientDateStr >= $clientStartStr && $clientDateStr <= $clientEndStr) {
-                // Extract schedule times
-                $scheduleStartTime = clone $utcDate;
-                list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
-                $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
+            // Update each record with new times
+            foreach ($availabilityRecords as $record) {
+                $record->setStartTime($booking->getStartTime());
+                $record->setEndTime($booking->getEndTime());
                 
-                $scheduleEndTime = clone $utcDate;
-                list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
-                $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
-                
-                // Convert to client timezone for display
-                $clientStartTime = clone $scheduleStartTime;
-                $clientStartTime->setTimezone(new \DateTimeZone($clientTimezone));
-                
-                $clientEndTime = clone $scheduleEndTime;
-                $clientEndTime->setTimezone(new \DateTimeZone($clientTimezone));
-                
-                // Store date with schedule information
-                if (!isset($availableDatesMap[$clientDateStr])) {
-                    $availableDatesMap[$clientDateStr] = [
-                        'date' => $clientDateStr,
-                        'day_of_week' => $clientDate->format('l'),
-                        'available_blocks' => []
-                    ];
+                if ($booking->isCancelled()) {
+                    $record->setStatus('cancelled');
                 }
                 
-                // Add this availability block
-                $availableDatesMap[$clientDateStr]['available_blocks'][] = [
-                    'start_time' => $clientStartTime->format('H:i:s'),
-                    'end_time' => $clientEndTime->format('H:i:s'),
-                    'start_utc' => $scheduleStartTime->format('Y-m-d H:i:s'),
-                    'end_utc' => $scheduleEndTime->format('Y-m-d H:i:s')
-                ];
+                $this->entityManager->persist($record);
+            }
+            
+            // If booking was cancelled, no need to check for new hosts
+            if ($booking->isCancelled()) {
+                $this->entityManager->flush();
+                return;
+            }
+            
+            // Check if new hosts need availability records
+            $event = $booking->getEvent();
+            $hosts = $this->getEventHosts($event);
+            
+            // Get user IDs with existing records
+            $existingUserIds = array_map(function($record) {
+                return $record->getUser()->getId();
+            }, $availabilityRecords);
+            
+            // Create records for any new hosts
+            foreach ($hosts as $host) {
+                if (!in_array($host->getId(), $existingUserIds)) {
+                    $this->userAvailabilityService->createInternalAvailability(
+                        $host,
+                        $event->getName() . ' - Booking',
+                        $booking->getStartTime(),
+                        $booking->getEndTime(),
+                        $event,
+                        $booking
+                    );
+                }
+            }
+            
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            // Log error but don't fail the booking update
+            error_log('Failed to update host availability records: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle booking cancellation to also cancel availability records
+     */
+    public function handleBookingCancelled(EventBookingEntity $booking): void
+    {
+        try {
+            // Find all availability records for this booking
+            $availabilityRecords = $this->entityManager->getRepository('App\Plugins\Account\Entity\UserAvailabilityEntity')
+                ->findBy([
+                    'booking' => $booking,
+                    'deleted' => false
+                ]);
+            
+            // Mark each record as cancelled
+            foreach ($availabilityRecords as $record) {
+                $record->setStatus('cancelled');
+                $this->entityManager->persist($record);
+            }
+            
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            // Log error but don't fail the booking cancellation
+            error_log('Failed to cancel host availability records: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Check if a specific time slot is available for the event and all required hosts
+     */
+    public function isTimeSlotAvailableForAll(
+        EventEntity $event, 
+        DateTimeInterface $startDateTime, 
+        DateTimeInterface $endDateTime, 
+        ?string $clientTimezone = null,
+        ?int $excludeBookingId = null
+    ): bool {
+        // First check if the slot works with the event schedule
+        if (!$this->isTimeSlotAvailable($event, $startDateTime, $endDateTime, $clientTimezone)) {
+            return false;
+        }
+        
+        // Check if there are conflicting bookings (except the one being updated)
+        $existingBookings = $this->crudManager->findMany(
+            EventBookingEntity::class,
+            [],
+            1,
+            100,
+            [
+                'event' => $event,
+                'cancelled' => false
+            ]
+        );
+        
+        foreach ($existingBookings as $booking) {
+            if ($excludeBookingId && $booking->getId() === $excludeBookingId) {
+                continue; // Skip the booking being updated
+            }
+            
+            $bookingStart = $booking->getStartTime();
+            $bookingEnd = $booking->getEndTime();
+            
+            // Check for overlap
+            if (
+                ($startDateTime < $bookingEnd && $endDateTime > $bookingStart) ||
+                ($startDateTime <= $bookingStart && $endDateTime >= $bookingEnd)
+            ) {
+                return false; // Overlaps with an existing booking
             }
         }
         
-        // Convert map to array for return
-        return array_values($availableDatesMap);
+        // Get hosts and check availability
+        $hosts = $this->getEventHosts($event);
+        
+        if (empty($hosts)) {
+            // No hosts, so slot is available
+            return true;
+        }
+        
+        $availabilityType = $event->getAvailabilityType();
+        
+        if ($availabilityType === 'one_host_available') {
+            // At least one host must be available
+            foreach ($hosts as $host) {
+                if ($this->userAvailabilityService->isUserAvailable($host, $startDateTime, $endDateTime)) {
+                    return true;
+                }
+            }
+            
+            // No hosts available
+            return false;
+        } else {
+            // All hosts must be available
+            foreach ($hosts as $host) {
+                if (!$this->userAvailabilityService->isUserAvailable($host, $startDateTime, $endDateTime)) {
+                    return false;
+                }
+            }
+            
+            // All hosts are available
+            return true;
+        }
     }
 
     /**
@@ -576,6 +787,4 @@ class EventScheduleService
             return [];
         }
     }
-
-
 }
