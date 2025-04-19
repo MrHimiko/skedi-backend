@@ -194,10 +194,10 @@ class UserAvailabilityService
         string $source,
         string $sourceId,
         ?string $description = null,
-        string $status = 'confirmed'
+        string $status = 'confirmed'  
     ): UserAvailabilityEntity {
         try {
-            // Check if an entry with this source_id already exists
+
             $existing = $this->crudManager->findMany(
                 UserAvailabilityEntity::class,
                 [],
@@ -217,7 +217,7 @@ class UserAvailabilityService
                 $existing->setDescription($description);
                 $existing->setStartTime($startTime);
                 $existing->setEndTime($endTime);
-                $existing->setStatus($status);
+                $existing->setStatus($status);  // Make sure this is using the passed status
                 $existing->setLastSynced(new \DateTime());
                 $existing->setDeleted(false); // Undelete if previously deleted
                 
@@ -236,12 +236,12 @@ class UserAvailabilityService
             $availability->setEndTime($endTime);
             $availability->setSource($source);
             $availability->setSourceId($sourceId);
-            $availability->setStatus($status);
+            $availability->setStatus($status);  // Make sure this is using the passed status
             $availability->setLastSynced(new \DateTime());
-
+    
             $this->entityManager->persist($availability);
             $this->entityManager->flush();
-
+    
             return $availability;
         } catch (\Exception $e) {
             throw new AccountException('Failed to create external availability: ' . $e->getMessage());
@@ -340,6 +340,9 @@ class UserAvailabilityService
                     throw new AccountException('Missing required fields for availability');
                 }
                 
+                // Pass the status directly rather than using a default value
+                $status = isset($item['status']) ? $item['status'] : 'confirmed';
+                
                 $availability = $this->createExternalAvailability(
                     $user,
                     $item['title'],
@@ -348,7 +351,7 @@ class UserAvailabilityService
                     $source,
                     $item['source_id'],
                     $item['description'] ?? null,
-                    $item['status'] ?? 'confirmed'
+                    $status
                 );
                 
                 $created[] = $availability;

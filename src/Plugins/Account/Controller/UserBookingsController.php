@@ -55,7 +55,6 @@ class UserBookingsController extends AbstractController
             $status = $request->query->get('status', 'all');
             $page = max(1, (int)$request->query->get('page', 1));
             $limit = min(100, max(10, (int)$request->query->get('page_size', 20)));
-            $internalOnly = $request->query->get('internal') === 'true';
             
             if (!$startTime || !$endTime) {
                 return $this->responseService->json(false, 'Start time and end time are required', null, 400);
@@ -69,88 +68,65 @@ class UserBookingsController extends AbstractController
                 return $this->responseService->json(false, 'End time must be after start time', null, 400);
             }
             
-            // Print debug information
-            error_log("Date Range: " . $startDate->format('Y-m-d H:i:s') . " to " . $endDate->format('Y-m-d H:i:s'));
+            // Setup filters for date range - always use the provided start/end time
+            $filters = [
+                [
+                    'field' => 'startTime',
+                    'operator' => 'greater_than_or_equal',
+                    'value' => $startDate
+                ],
+                [
+                    'field' => 'endTime',
+                    'operator' => 'less_than_or_equal',
+                    'value' => $endDate
+                ]
+            ];
             
-            // Setup filters - simplified date range filter
-            $filters = [];
-            
-            // Add status filter
-            $now = new \DateTime();
-            
-            switch ($status) {
-                case 'upcoming':
-                    // For upcoming events, only filter by end time being in the future
-                    $filters[] = [
-                        'field' => 'endTime',
-                        'operator' => 'greater_than',
-                        'value' => $now
-                    ];
-                    // Status check moved to criteria below for better compatibility with CrudManager
-                    break;
-                
-                case 'past':
-                    $filters[] = [
-                        'field' => 'endTime',
-                        'operator' => 'less_than',
-                        'value' => $now
-                    ];
-                    break;
-                
-                case 'cancelled':
-                    // Status check moved to criteria below
-                    break;
-                
-                case 'active':
-                    // Status check moved to criteria below
-                    break;
-                
-                // 'all' or any other value, no additional filter
-            }
-            
-            // Setup criteria with status checks moved here from filters
+            // Basic criteria
             $criteria = [
                 'user' => $user,
                 'deleted' => false
             ];
             
-            // Status-specific criteria
-            if ($status === 'cancelled') {
-                $criteria['status'] = 'cancelled';
-            } else if ($status === 'active' || $status === 'upcoming') {
-                $criteria['status'] = 'confirmed'; // Assuming 'confirmed' is your active status
+            // Handle status filtering - only filter by status if specified
+            if ($status !== 'all' && $status !== 'past' && $status !== 'upcoming') {
+                $criteria['status'] = $status;
+            } else if ($status === 'past') {
+                // Past bookings - add as a filter rather than criteria
+                $now = new \DateTime();
+                $filters[] = [
+                    'field' => 'endTime',
+                    'operator' => 'less_than',
+                    'value' => $now
+                ];
+            } else if ($status === 'upcoming') {
+                // Upcoming bookings - add as a filter rather than criteria
+                $now = new \DateTime();
+                $filters[] = [
+                    'field' => 'startTime',
+                    'operator' => 'greater_than',
+                    'value' => $now
+                ];
             }
             
-            // Filter by source if internal only requested
-            if ($internalOnly) {
-                $criteria['source'] = 'internal';
-            }
+            // Add sorting
+            $callback = function($queryBuilder) {
+                $queryBuilder->orderBy('t1.startTime', 'ASC');
+            };
             
-            // Debug criteria
-            error_log("Criteria: " . json_encode($criteria));
-            
-            // Manually handle date filtering with a callback for more control
-            // Get bookings using CrudManager
+            // Use UserAvailabilityEntity
             $bookings = $this->crudManager->findMany(
-                UserAvailabilityEntity::class,
+                'App\Plugins\Account\Entity\UserAvailabilityEntity',
                 $filters,
                 $page,
                 $limit,
                 $criteria,
-                function($queryBuilder) use ($startDate, $endDate) {
-                    // This ensures we get bookings that overlap with our date range
-                    $queryBuilder->andWhere('(t1.startTime < :endDate AND t1.endTime > :startDate)')
-                        ->setParameter('startDate', $startDate)
-                        ->setParameter('endDate', $endDate);
-                    
-                    // Add debug
-                    error_log($queryBuilder->getQuery()->getSQL());
-                }
+                $callback
             );
             
             // Get total count for pagination
             $totalCount = $this->crudManager->findMany(
-                UserAvailabilityEntity::class,
+                'App\Plugins\Account\Entity\UserAvailabilityEntity',
                 $filters,
                 1,
                 1,
@@ -162,8 +138,7 @@ class UserBookingsController extends AbstractController
             // Format results
             $formattedBookings = [];
             foreach ($bookings as $booking) {
-                $bookingData = $booking->toArray();
-                $formattedBookings[] = $bookingData;
+                $formattedBookings[] = $booking->toArray();
             }
             
             // Pagination info
