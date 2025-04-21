@@ -12,6 +12,8 @@ use App\Plugins\Account\Service\LoginService;
 use App\Plugins\Account\Service\UserService;
 use App\Plugins\Teams\Service\TeamService;
 use App\Plugins\Account\Exception\AccountException;
+use App\Plugins\Account\Service\RegisterService;
+use App\Plugins\Organizations\Entity\OrganizationEntity;
 
 #[Route('/api/account')]
 class MainController extends AbstractController
@@ -21,19 +23,22 @@ class MainController extends AbstractController
     private UserService $userService;
     private TeamService $teamService;
     private EventService $eventService;
+    private RegisterService $registerService;
 
     public function __construct(
         ResponseService $responseService,
         LoginService $loginService,
         UserService $userService,
         TeamService $teamService,
-        EventService $eventService
+        EventService $eventService,
+        RegisterService $registerService
     ) {
         $this->responseService = $responseService;
         $this->loginService = $loginService;
         $this->userService = $userService;
         $this->teamService = $teamService;
         $this->eventService = $eventService;
+        $this->registerService = $registerService;
     }
 
     #[Route('/login', name: 'account_login', methods: ['POST'])]
@@ -50,6 +55,57 @@ class MainController extends AbstractController
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e, null, 400);
+        }
+    }
+
+    #[Route('/register', name: 'account_register', methods: ['POST'])]
+    public function register(Request $request): JsonResponse
+    {
+        try {
+            $data = $request->attributes->get('data');
+            
+            // Basic validation
+            if (empty($data['email']) || empty($data['name']) || empty($data['password'])) {
+                return $this->responseService->json(false, 'Email, name, and password are required.', null, 400);
+            }
+
+            // For MVP, create a simple organization
+            $organization = new OrganizationEntity();
+            $firstName = explode(' ', $data['name'])[0];
+            $orgName = $firstName . "'s Organization";
+            $organization->setName($orgName);
+            $organization->setSlug(strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $firstName . "-organization")));
+            
+            // Save the organization to the database
+            $entityManager = $this->getDoctrine()->getManager();
+            $entityManager->persist($organization);
+            $entityManager->flush();
+
+            // Register the user
+            $user = $this->registerService->register($organization, $data);
+            
+            // Log in the user automatically
+            try {
+                $token = $this->loginService->login([
+                    'email' => $data['email'],
+                    'password' => $data['password']
+                ]);
+                
+                return $this->responseService->json(true, 'Registration successful!', [
+                    'user' => $user->toArray(),
+                    'token' => $token->getValue(),
+                    'expires' => $token->getExpires()->format('Y-m-d H:i:s')
+                ], 201);
+            } catch (\Exception $e) {
+                // If auto-login fails, just return success
+                return $this->responseService->json(true, 'Registration successful. Please log in.', [
+                    'user' => $user->toArray()
+                ], 201);
+            }
+        } catch (AccountException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred: ' . $e->getMessage(), null, 500);
         }
     }
 

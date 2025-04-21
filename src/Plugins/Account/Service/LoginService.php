@@ -59,6 +59,9 @@ class LoginService
         }
     }
 
+    /**
+     * Get user by email
+     */
     private function getUser(string $email): ?UserEntity
     {
         return $this->entityManager->getRepository(UserEntity::class)->findOneBy([
@@ -66,7 +69,11 @@ class LoginService
         ]);
     }
 
-    private function createToken(UserEntity $user): TokenEntity
+    /**
+     * Create an authentication token for a user
+     * Made public to be used by RegisterService
+     */
+    public function createToken(UserEntity $user): TokenEntity
     {
         $expires = (new \DateTime())->modify('+1 month');
 

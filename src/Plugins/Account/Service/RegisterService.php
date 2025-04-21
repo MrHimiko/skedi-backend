@@ -11,9 +11,6 @@ use App\Plugins\Account\Entity\OrganizationEntity;
 use App\Plugins\Account\Exception\AccountException;
 use App\Exception\CrudException;
 
-use App\Plugins\Mailer\Exception\MailerException;
-use App\Plugins\Mailer\Service\EmailService;
-
 class RegisterService
 {
     private EntityManagerInterface $entityManager;
@@ -21,22 +18,19 @@ class RegisterService
     private ValidatorService $validatorService;
     private UserService $userService;
     private OrganizationService $organizationService;
-    private EmailService $emailService;
 
     public function __construct(
         EntityManagerInterface $entityManager,
         UserPasswordHasherInterface $passwordHasher,
         ValidatorService $validatorService,
         UserService $userService,
-        OrganizationService $organizationService,
-        EmailService $emailService
+        OrganizationService $organizationService
     ) {
         $this->entityManager = $entityManager;
         $this->passwordHasher = $passwordHasher;
         $this->validatorService = $validatorService;
         $this->userService = $userService;
-        $this->organizationService = $organizationService;  
-        $this->emailService = $emailService;
+        $this->organizationService = $organizationService;
     }
 
     public function register(?OrganizationEntity $organization, array $data): UserEntity
@@ -45,17 +39,8 @@ class RegisterService
         
         $user = $this->userService->create($organization, $data + ['role' => 1]);
 
-        try 
-        {
-            $this->emailService->send($organization, $user, $user->getEmail(), 'welcome', [
-                'name' => $user->getName(),
-            ]);
-        }
-        catch(MailerException $e)
-        {
-            throw new AccountException($e->getMessage());
-        }
-
+        // No email sending in MVP version
+        
         return $user;
     }
 
