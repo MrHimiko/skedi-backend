@@ -13,7 +13,10 @@ use App\Plugins\Account\Service\UserService;
 use App\Plugins\Teams\Service\TeamService;
 use App\Plugins\Account\Exception\AccountException;
 use App\Plugins\Account\Service\RegisterService;
-use App\Plugins\Organizations\Entity\OrganizationEntity;
+use Doctrine\ORM\EntityManagerInterface;
+use App\Plugins\Organizations\Service\OrganizationService;
+use App\Plugins\Organizations\Service\UserOrganizationService;
+use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 
 #[Route('/api/account')]
 class MainController extends AbstractController
@@ -24,6 +27,10 @@ class MainController extends AbstractController
     private TeamService $teamService;
     private EventService $eventService;
     private RegisterService $registerService;
+    private OrganizationService $organizationService;
+    private EntityManagerInterface $entityManager;
+    private UserOrganizationService $userOrganizationService;
+    private UserPasswordHasherInterface $passwordHasher;
 
     public function __construct(
         ResponseService $responseService,
@@ -31,7 +38,11 @@ class MainController extends AbstractController
         UserService $userService,
         TeamService $teamService,
         EventService $eventService,
-        RegisterService $registerService
+        RegisterService $registerService,
+        OrganizationService $organizationService,
+        EntityManagerInterface $entityManager,
+        UserOrganizationService $userOrganizationService,
+        UserPasswordHasherInterface $passwordHasher
     ) {
         $this->responseService = $responseService;
         $this->loginService = $loginService;
@@ -39,7 +50,12 @@ class MainController extends AbstractController
         $this->teamService = $teamService;
         $this->eventService = $eventService;
         $this->registerService = $registerService;
+        $this->organizationService = $organizationService;
+        $this->entityManager = $entityManager;
+        $this->userOrganizationService = $userOrganizationService;
+        $this->passwordHasher = $passwordHasher;
     }
+
 
     #[Route('/login', name: 'account_login', methods: ['POST'])]
     public function login(Request $request): JsonResponse
@@ -58,6 +74,7 @@ class MainController extends AbstractController
         }
     }
 
+
     #[Route('/register', name: 'account_register', methods: ['POST'])]
     public function register(Request $request): JsonResponse
     {
@@ -69,38 +86,69 @@ class MainController extends AbstractController
                 return $this->responseService->json(false, 'Email, name, and password are required.', null, 400);
             }
 
-            // For MVP, create a simple organization
-            $organization = new OrganizationEntity();
-            $firstName = explode(' ', $data['name'])[0];
-            $orgName = $firstName . "'s Organization";
-            $organization->setName($orgName);
-            $organization->setSlug(strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $firstName . "-organization")));
+            // Start a transaction for atomicity
+            $this->entityManager->beginTransaction();
             
-            // Save the organization to the database
-            $entityManager = $this->getDoctrine()->getManager();
-            $entityManager->persist($organization);
-            $entityManager->flush();
-
-            // Register the user
-            $user = $this->registerService->register($organization, $data);
-            
-            // Log in the user automatically
             try {
-                $token = $this->loginService->login([
-                    'email' => $data['email'],
-                    'password' => $data['password']
-                ]);
+                // 1. Create the user entity directly
+                $user = new \App\Plugins\Account\Entity\UserEntity();
+                $user->setName($data['name']);
+                $user->setEmail($data['email']);
                 
+                // Hash the password properly
+                $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
+                $user->setPassword($hashedPassword);
+                
+                $this->entityManager->persist($user);
+                $this->entityManager->flush();
+                
+                // 2. Create the organization with a unique slug
+                $firstName = explode(' ', $data['name'])[0];
+                $orgName = $firstName . "'s Organization";
+                $slug = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $firstName . "-organization")) . '-' . time();
+                
+                $organization = new \App\Plugins\Organizations\Entity\OrganizationEntity();
+                $organization->setName($orgName);
+                $organization->setSlug($slug);
+                
+                $this->entityManager->persist($organization);
+                $this->entityManager->flush();
+                
+                // 3. Create the user-organization relationship
+                $userOrg = new \App\Plugins\Organizations\Entity\UserOrganizationEntity();
+                $userOrg->setUser($user);
+                $userOrg->setOrganization($organization);
+                $userOrg->setRole('admin');
+                
+                $this->entityManager->persist($userOrg);
+                $this->entityManager->flush();
+                
+                // 4. Generate a token for the user directly
+                $tokenEntity = new \App\Plugins\Account\Entity\TokenEntity();
+                $tokenEntity->setUser($user);
+                $expires = new \DateTime('+1 month');
+                $tokenValue = bin2hex(random_bytes(32)) . ':' . $expires->getTimestamp();
+                $tokenEntity->setValue($tokenValue);
+                $tokenEntity->setExpires($expires);
+                $this->entityManager->persist($tokenEntity);
+                $this->entityManager->flush();
+                
+                // Encode the token ID with the value for the final token
+                $tokenEntity->setValue(base64_encode($tokenEntity->getId() . ':' . $tokenEntity->getValue()));
+                $this->entityManager->flush();
+                
+                $this->entityManager->commit();
+                
+                // Return success with token, matching login API format
                 return $this->responseService->json(true, 'Registration successful!', [
                     'user' => $user->toArray(),
-                    'token' => $token->getValue(),
-                    'expires' => $token->getExpires()->format('Y-m-d H:i:s')
+                    'token' => $tokenEntity->getValue(),
+                    'expires' => $tokenEntity->getExpires()->format('Y-m-d H:i:s')
                 ], 201);
+                
             } catch (\Exception $e) {
-                // If auto-login fails, just return success
-                return $this->responseService->json(true, 'Registration successful. Please log in.', [
-                    'user' => $user->toArray()
-                ], 201);
+                $this->entityManager->rollback();
+                throw $e;
             }
         } catch (AccountException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
@@ -213,7 +261,6 @@ class MainController extends AbstractController
                 }
             } catch (\Exception $e) {
                 // Log error but continue processing other organizations
-                // (we don't want one bad organization to break the entire request)
                 continue;
             }
         }
