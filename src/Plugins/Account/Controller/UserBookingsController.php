@@ -11,22 +11,23 @@ use App\Plugins\Account\Repository\UserRepository;
 use App\Plugins\Account\Entity\UserAvailabilityEntity;
 use App\Plugins\Account\Exception\AccountException;
 use App\Service\CrudManager;
+use Doctrine\ORM\EntityManagerInterface;
 
 #[Route('/api')]
 class UserBookingsController extends AbstractController
 {
-    private ResponseService $responseService;
-    private UserRepository $userRepository;
-    private CrudManager $crudManager;
+    private EntityManagerInterface $entityManager;
 
     public function __construct(
         ResponseService $responseService,
         UserRepository $userRepository,
-        CrudManager $crudManager
+        CrudManager $crudManager,
+        EntityManagerInterface $entityManager
     ) {
         $this->responseService = $responseService;
         $this->userRepository = $userRepository;
         $this->crudManager = $crudManager;
+        $this->entityManager = $entityManager;
     }
 
     /**
@@ -68,92 +69,120 @@ class UserBookingsController extends AbstractController
                 return $this->responseService->json(false, 'End time must be after start time', null, 400);
             }
             
-            // Setup filters for date range - always use the provided start/end time
-            $filters = [
+            // Get availability records for the user
+            $availabilityRecords = $this->crudManager->findMany(
+                'App\Plugins\Account\Entity\UserAvailabilityEntity',
                 [
-                    'field' => 'startTime',
-                    'operator' => 'greater_than_or_equal',
-                    'value' => $startDate
+                    [
+                        'field' => 'startTime',
+                        'operator' => 'greater_than_or_equal',
+                        'value' => $startDate
+                    ],
+                    [
+                        'field' => 'endTime',
+                        'operator' => 'less_than_or_equal',
+                        'value' => $endDate
+                    ]
                 ],
+                1,
+                1000,
                 [
-                    'field' => 'endTime',
-                    'operator' => 'less_than_or_equal',
-                    'value' => $endDate
-                ]
-            ];
+                    'user' => $user,
+                    'deleted' => false
+                ],
+                function($queryBuilder) {
+                    $queryBuilder->orderBy('t1.startTime', 'ASC');
+                }
+            );
             
-            // Basic criteria
-            $criteria = [
-                'user' => $user,
-                'deleted' => false
-            ];
-            
-            // Handle status filtering - only filter by status if specified
-            if ($status !== 'all' && $status !== 'past' && $status !== 'upcoming') {
-                $criteria['status'] = $status;
-            } else if ($status === 'past') {
-                // Past bookings - add as a filter rather than criteria
-                $now = new \DateTime();
-                $filters[] = [
-                    'field' => 'endTime',
-                    'operator' => 'less_than',
-                    'value' => $now
-                ];
-            } else if ($status === 'upcoming') {
-                // Upcoming bookings - add as a filter rather than criteria
-                $now = new \DateTime();
-                $filters[] = [
-                    'field' => 'startTime',
-                    'operator' => 'greater_than',
-                    'value' => $now
-                ];
+            // Extract booking IDs from availability records
+            $bookingIds = [];
+            foreach ($availabilityRecords as $record) {
+                if ($record->getBooking() !== null) {
+                    $bookingIds[] = $record->getBooking()->getId();
+                }
             }
             
-            // Add sorting
-            $callback = function($queryBuilder) {
-                $queryBuilder->orderBy('t1.startTime', 'ASC');
-            };
+            // If no bookings found, return empty array
+            if (empty($bookingIds)) {
+                return $this->responseService->json(true, 'retrieve', [
+                    'bookings' => [],
+                    'pagination' => [
+                        'current_page' => $page,
+                        'total_pages' => 0,
+                        'total_items' => 0,
+                        'page_size' => $limit
+                    ]
+                ]);
+            }
             
-            // Use UserAvailabilityEntity
-            $bookings = $this->crudManager->findMany(
-                'App\Plugins\Account\Entity\UserAvailabilityEntity',
-                $filters,
-                $page,
-                $limit,
-                $criteria,
-                $callback
-            );
+            // Fetch the actual booking data from event_bookings table
+            $bookings = $this->entityManager->getRepository('App\Plugins\Events\Entity\EventBookingEntity')
+                ->findBy(['id' => $bookingIds]);
             
-            // Get total count for pagination
-            $totalCount = $this->crudManager->findMany(
-                'App\Plugins\Account\Entity\UserAvailabilityEntity',
-                $filters,
-                1,
-                1,
-                $criteria,
-                null,
-                true
-            );
-            
-            // Format results
+            // Format results - combine data from both entities
             $formattedBookings = [];
             foreach ($bookings as $booking) {
-                $formattedBookings[] = $booking->toArray();
+                // Find the corresponding availability record
+                $availabilityRecord = null;
+                foreach ($availabilityRecords as $record) {
+                    if ($record->getBooking() && $record->getBooking()->getId() === $booking->getId()) {
+                        $availabilityRecord = $record;
+                        break;
+                    }
+                }
+                
+                // Skip if we can't find the matching record (shouldn't happen)
+                if (!$availabilityRecord) continue;
+                
+                // Apply status filter if needed
+                if ($status !== 'all') {
+                    if ($status === 'past') {
+                        $now = new \DateTime();
+                        if ($booking->getEndTime() >= $now || $booking->getStatus() === 'removed') continue;
+                    } elseif ($status === 'upcoming') {
+                        $now = new \DateTime();
+                        if ($booking->getStartTime() <= $now || $booking->getStatus() === 'removed') continue;
+                    } elseif ($booking->getStatus() !== $status || $booking->getStatus() === 'removed') {
+                        continue;
+                    }
+                } else {
+                    if ($booking->getStatus() === 'removed') continue;
+                }
+                
+                // Create a combined record with data from both entities
+                $formattedBookings[] = [
+                    'id' => $availabilityRecord->getId(),
+                    'user_id' => $user->getId(),
+                    'title' => $availabilityRecord->getTitle(),
+                    'description' => $availabilityRecord->getDescription(),
+                    'start_time' => $booking->getStartTime()->format('Y-m-d H:i:s'),
+                    'end_time' => $booking->getEndTime()->format('Y-m-d H:i:s'),
+                    'source' => $availabilityRecord->getSource(),
+                    'source_id' => $availabilityRecord->getSourceId(),
+                    'status' => $booking->getStatus(), // Get status from booking
+                    'booking_id' => $booking->getId(),
+                    'event_id' => $booking->getEvent()->getId(),
+                    'cancelled' => $booking->isCancelled(),
+                    'created' => $availabilityRecord->getCreated()->format('Y-m-d H:i:s'),
+                    'updated' => $availabilityRecord->getUpdated()->format('Y-m-d H:i:s')
+                ];
             }
             
-            // Pagination info
-            $totalPages = ceil($totalCount[0] / $limit);
+            // Apply pagination to formatted results
+            $total = count($formattedBookings);
+            $offset = ($page - 1) * $limit;
+            $pagedBookings = array_slice($formattedBookings, $offset, $limit);
             
             return $this->responseService->json(true, 'retrieve', [
-                'bookings' => $formattedBookings,
+                'bookings' => $pagedBookings,
                 'pagination' => [
                     'current_page' => $page,
-                    'total_pages' => $totalPages,
-                    'total_items' => $totalCount[0],
+                    'total_pages' => ceil($total / $limit),
+                    'total_items' => $total,
                     'page_size' => $limit
                 ]
             ]);
-            
         } catch (AccountException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {

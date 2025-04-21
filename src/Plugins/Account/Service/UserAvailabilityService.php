@@ -147,7 +147,8 @@ class UserAvailabilityService
         \DateTimeInterface $endTime,
         ?EventEntity $event = null,
         ?EventBookingEntity $booking = null,
-        ?string $description = null
+        ?string $description = null,
+        string $status = 'confirmed'
     ): UserAvailabilityEntity {
         try {
             // Validate time range
@@ -162,7 +163,7 @@ class UserAvailabilityService
             $availability->setStartTime($startTime);
             $availability->setEndTime($endTime);
             $availability->setSource('internal');
-            $availability->setStatus('confirmed');
+            $availability->setStatus($status);
             
             if ($event) {
                 $availability->setEvent($event);
@@ -272,7 +273,7 @@ class UserAvailabilityService
                 ]),
                 'status' => new Assert\Optional([
                     new Assert\Type('string'),
-                    new Assert\Choice(['choices' => ['confirmed', 'tentative', 'cancelled']]),
+                    new Assert\Choice(['choices' => ['confirmed', 'tentative', 'canceled']]),
                 ]),
             ];
 
@@ -373,7 +374,7 @@ class UserAvailabilityService
     {
         try {
             $event = $booking->getEvent();
-            $title = $event->getName() . ' - Booking';
+            $title = $event->getName();
             
             // Get event assignees (hosts)
             $assignees = $this->entityManager->getRepository('App\Plugins\Events\Entity\EventAssigneeEntity')
@@ -418,7 +419,7 @@ class UserAvailabilityService
                 $record->setEndTime($booking->getEndTime());
                 
                 if ($booking->isCancelled()) {
-                    $record->setStatus('cancelled');
+                    $record->setStatus('canceled');
                 }
                 
                 $this->entityManager->persist($record);
@@ -446,7 +447,7 @@ class UserAvailabilityService
             
             // Mark all as cancelled
             foreach ($availabilityRecords as $record) {
-                $record->setStatus('cancelled');
+                $record->setStatus('canceled');
                 $this->entityManager->persist($record);
             }
             

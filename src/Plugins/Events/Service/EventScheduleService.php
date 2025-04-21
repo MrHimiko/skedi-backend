@@ -557,11 +557,13 @@ class EventScheduleService
             foreach ($hosts as $host) {
                 $this->userAvailabilityService->createInternalAvailability(
                     $host,
-                    $event->getName() . ' - Booking',
+                    $event->getName(),
                     $booking->getStartTime(),
                     $booking->getEndTime(),
                     $event,
-                    $booking
+                    $booking,
+                    null,
+                    $booking->getStatus() // Pass the correct status
                 );
             }
         } catch (\Exception $e) {
@@ -579,29 +581,27 @@ class EventScheduleService
         try {
             // Find all availability records for this booking
             $availabilityRecords = $this->entityManager->getRepository('App\Plugins\Account\Entity\UserAvailabilityEntity')
-                ->findBy([
-                    'booking' => $booking,
-                    'deleted' => false
-                ]);
-            
+            ->findBy([
+                'booking' => $booking,
+                'deleted' => false
+            ]);
+        
             // Update each record with new times
             foreach ($availabilityRecords as $record) {
                 $record->setStartTime($booking->getStartTime());
                 $record->setEndTime($booking->getEndTime());
                 
+                // Always sync the status with the booking status
                 if ($booking->isCancelled()) {
                     $record->setStatus('cancelled');
+                } else {
+                    // Copy the status from booking to availability
+                    $record->setStatus($booking->getStatus());
                 }
                 
                 $this->entityManager->persist($record);
             }
-            
-            // If booking was cancelled, no need to check for new hosts
-            if ($booking->isCancelled()) {
-                $this->entityManager->flush();
-                return;
-            }
-            
+                
             // Check if new hosts need availability records
             $event = $booking->getEvent();
             $hosts = $this->getEventHosts($event);
@@ -616,7 +616,7 @@ class EventScheduleService
                 if (!in_array($host->getId(), $existingUserIds)) {
                     $this->userAvailabilityService->createInternalAvailability(
                         $host,
-                        $event->getName() . ' - Booking',
+                        $event->getName(),
                         $booking->getStartTime(),
                         $booking->getEndTime(),
                         $event,
