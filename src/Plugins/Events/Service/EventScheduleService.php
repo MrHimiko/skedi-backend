@@ -275,10 +275,11 @@ class EventScheduleService
         EventEntity $event, 
         DateTimeInterface $date, 
         ?int $durationMinutes = null, 
-        ?string $clientTimezone = null
+        ?string $clientTimezone = null,
+        ?int $bufferHours = 0 
     ): array {
         // Get available slots based on event schedule
-        $slots = $this->getBaseAvailableTimeSlots($event, $date, $durationMinutes, $clientTimezone);
+        $slots = $this->getBaseAvailableTimeSlots($event, $date, $durationMinutes, $clientTimezone, $bufferHours);
         
         // No need to check host availability if there are no slots
         if (empty($slots)) {
@@ -312,7 +313,8 @@ class EventScheduleService
         EventEntity $event, 
         DateTimeInterface $date, 
         ?int $durationMinutes = null, 
-        ?string $clientTimezone = null
+        ?string $clientTimezone = null,
+        ?int $bufferHours = 0 
     ): array {
         // Set default timezone if not provided
         if (!$clientTimezone) {
@@ -332,7 +334,7 @@ class EventScheduleService
             $durations = $event->getDuration();
             $durationMinutes = isset($durations[0]['duration']) ? (int)$durations[0]['duration'] : 30;
         }
-
+    
         // Create client date objects for the requested date
         $clientDate = clone $date;
         if ($date->getTimezone()->getName() !== $clientTimezone) {
@@ -352,6 +354,19 @@ class EventScheduleService
         
         $utcEndOfClientDay = clone $clientEndOfDay;
         $utcEndOfClientDay->setTimezone(new \DateTimeZone('UTC'));
+        
+        // Get current time in UTC for buffer calculation
+        $currentUtcTime = new \DateTime('now', new \DateTimeZone('UTC'));
+        
+        // Check if requested date is today (in client timezone)
+        $isToday = $clientDate->format('Y-m-d') === (new \DateTime('now', new \DateTimeZone($clientTimezone)))->format('Y-m-d');
+        
+        // Calculate buffer time for today's slots
+        $bufferTime = null;
+        if ($isToday) {
+            $bufferTime = clone $currentUtcTime;
+            $bufferTime->modify("+{$bufferHours} hours");
+        }
         
         // Get dates that need to be checked in UTC (could span up to 2 days)
         $datesToCheck = [];
@@ -421,6 +436,12 @@ class EventScheduleService
                     break;
                 }
                 
+                // BUFFER TIME CHECK: Skip slots that start before the buffer time for today
+                if ($isToday && $bufferTime && $slotStart < $bufferTime) {
+                    $slotStart->add($slotIncrement);
+                    continue;
+                }
+                
                 // Check for conflicts
                 $hasConflict = false;
                 
@@ -451,7 +472,6 @@ class EventScheduleService
                     $clientSlotEnd->setTimezone(new \DateTimeZone($clientTimezone));
                     
                     // Check if this slot's START time falls within the requested client day
-                    // This is the key change - we ONLY care about the start time now
                     if ($clientSlotStart->format('Y-m-d') === $clientDate->format('Y-m-d')) {
                         $allSlots[] = [
                             'start' => $slotStart->format('Y-m-d H:i:s'),
@@ -557,13 +577,11 @@ class EventScheduleService
             foreach ($hosts as $host) {
                 $this->userAvailabilityService->createInternalAvailability(
                     $host,
-                    $event->getName(),
+                    $event->getName() . ' - Booking',
                     $booking->getStartTime(),
                     $booking->getEndTime(),
                     $event,
-                    $booking,
-                    null,
-                    $booking->getStatus() // Pass the correct status
+                    $booking
                 );
             }
         } catch (\Exception $e) {
@@ -581,27 +599,29 @@ class EventScheduleService
         try {
             // Find all availability records for this booking
             $availabilityRecords = $this->entityManager->getRepository('App\Plugins\Account\Entity\UserAvailabilityEntity')
-            ->findBy([
-                'booking' => $booking,
-                'deleted' => false
-            ]);
-        
+                ->findBy([
+                    'booking' => $booking,
+                    'deleted' => false
+                ]);
+            
             // Update each record with new times
             foreach ($availabilityRecords as $record) {
                 $record->setStartTime($booking->getStartTime());
                 $record->setEndTime($booking->getEndTime());
                 
-                // Always sync the status with the booking status
                 if ($booking->isCancelled()) {
                     $record->setStatus('cancelled');
-                } else {
-                    // Copy the status from booking to availability
-                    $record->setStatus($booking->getStatus());
                 }
                 
                 $this->entityManager->persist($record);
             }
-                
+            
+            // If booking was cancelled, no need to check for new hosts
+            if ($booking->isCancelled()) {
+                $this->entityManager->flush();
+                return;
+            }
+            
             // Check if new hosts need availability records
             $event = $booking->getEvent();
             $hosts = $this->getEventHosts($event);
@@ -616,7 +636,7 @@ class EventScheduleService
                 if (!in_array($host->getId(), $existingUserIds)) {
                     $this->userAvailabilityService->createInternalAvailability(
                         $host,
-                        $event->getName(),
+                        $event->getName() . ' - Booking',
                         $booking->getStartTime(),
                         $booking->getEndTime(),
                         $event,
@@ -666,12 +686,26 @@ class EventScheduleService
         DateTimeInterface $startDateTime, 
         DateTimeInterface $endDateTime, 
         ?string $clientTimezone = null,
-        ?int $excludeBookingId = null
+        ?int $excludeBookingId = null,
+        ?int $bufferHours = 0 
     ): bool {
         // First check if the slot works with the event schedule
         if (!$this->isTimeSlotAvailable($event, $startDateTime, $endDateTime, $clientTimezone)) {
             return false;
         }
+        
+        // Check buffer time for today
+        $currentUtcTime = new \DateTime('now', new \DateTimeZone('UTC'));
+        $bufferTime = clone $currentUtcTime;
+        $bufferTime->modify("+{$bufferHours} hours");
+        
+        // Check if requested slot is today and starts before the buffer time
+        $isToday = $startDateTime->format('Y-m-d') === $currentUtcTime->format('Y-m-d');
+        if ($isToday && $startDateTime < $bufferTime) {
+            return false; // Slot is within buffer time for today
+        }
+        
+        // Rest of the method remains the same...
         
         // Check if there are conflicting bookings (except the one being updated)
         $existingBookings = $this->crudManager->findMany(

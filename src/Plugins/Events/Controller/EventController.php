@@ -454,6 +454,7 @@ class EventController extends AbstractController
         $date = $request->query->get('date');
         $requestedDuration = $request->query->get('duration');
         $timezone = $request->query->get('timezone', 'UTC');
+        $bufferHours = $request->query->get('buffer_hours', 0); // Allow custom buffer override via query param
         
         if (!$date) {
             return $this->responseService->json(false, 'Date parameter is required.', null, 400);
@@ -507,14 +508,21 @@ class EventController extends AbstractController
                 $timezone = 'UTC';
             }
             
-            // Get available slots for the specified date with timezone support
+            // Get available slots for the specified date with timezone support and buffer time
             $dateObj = new \DateTime($date, new \DateTimeZone($timezone));
-            $slots = $this->scheduleService->getAvailableTimeSlots($event, $dateObj, $durationMinutes, $timezone);
+            $slots = $this->scheduleService->getAvailableTimeSlots(
+                $event, 
+                $dateObj, 
+                $durationMinutes, 
+                $timezone,
+                (int)$bufferHours // Pass the buffer hours
+            );
             
             return $this->responseService->json(true, 'retrieve', [
                 'slots' => $slots,
                 'timezone' => $timezone,
-                'duration' => $durationMinutes
+                'duration' => $durationMinutes,
+                'buffer_hours' => (int)$bufferHours
             ]);
         } catch (EventsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
@@ -522,11 +530,6 @@ class EventController extends AbstractController
             return $this->responseService->json(false, $e, null, 500);
         }
     }
-
-
-
-    
-
 
 
 
