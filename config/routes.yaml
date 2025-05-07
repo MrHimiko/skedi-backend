@@ -14,6 +14,10 @@ events:
     resource: ../src/Plugins/Events/Controller/
     type: attribute
 
+integrations:
+    resource: ../src/Plugins/Integrations/Controller/
+    type: attribute
+
 # billing:
 #     resource: ../src/Plugins/Billing/Controller/
 #     type: attribute
