@@ -4,6 +4,9 @@
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
 parameters:
+    google.client_id: '%env(GOOGLE_CLIENT_ID)%'
+    google.client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
+    google.redirect_uri: '%env(GOOGLE_REDIRECT_URI)%'
 
 services:
     # default configuration for services in *this* file
@@ -19,6 +22,7 @@ services:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
             - '../src/Kernel.php'
+
     App\Plugins\Account\Listener\RequestListener:
         tags:
             - { name: kernel.event_listener, event: kernel.request, priority: 10 }
@@ -31,32 +35,25 @@ services:
         tags:
             - { name: kernel.event_listener, event: kernel.exception }
 
-    # App\Plugins\Activity\Listener\EntityListener:
-    #     arguments:
-    #         $logService: '@App\Plugins\Activity\Service\LogService'
-    #         $requestStack: '@request_stack'
-    #     tags:
-    #         - { name: 'doctrine.event_listener', event: 'postPersist', method: 'postPersist' }
-    #         - { name: 'doctrine.event_listener', event: 'postUpdate', method: 'postUpdate' }
-    #         - { name: 'doctrine.event_listener', event: 'postRemove', method: 'postRemove' }
+    # Google Calendar Service configuration
+    App\Plugins\Integrations\Service\GoogleCalendarService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $integrationRepository: '@App\Plugins\Integrations\Repository\IntegrationRepository'
+            $userAvailabilityService: '@App\Plugins\Account\Service\UserAvailabilityService'
+            $crudManager: '@App\Service\CrudManager'
+            $parameterBag: '@parameter_bag'
 
     Aws\S3\S3Client:
         class: Aws\S3\S3Client
         arguments:
-            - 
+            -
                 region: '%env(CLOUDFLARE_R2_REGION)%'
                 version: 'latest'
                 credentials:
                     key: '%env(CLOUDFLARE_R2_ACCESS_KEY_ID)%'
                     secret: '%env(CLOUDFLARE_R2_SECRET_ACCESS_KEY)%'
                 endpoint: 'https://%env(CLOUDFLARE_R2_ACCOUNT_ID)%.r2.cloudflarestorage.com'
-            
-    # App\Plugins\Mailer\Service\EmailService:
-    #     arguments:
-    #         $awsAccessKeyId: '%env(AWS_ACCESS_KEY_ID)%'
-    #         $awsSecretAccessKey: '%env(AWS_SECRET_ACCESS_KEY)%'
-    #         $awsRegion: '%env(AWS_REGION)%'
-
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones

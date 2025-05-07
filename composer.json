@@ -12,6 +12,7 @@
         "doctrine/doctrine-bundle": "^2.13",
         "doctrine/lexer": "^3.0",
         "doctrine/orm": "^3.3",
+        "google/apiclient": "^2.18",
         "symfony/amazon-mailer": "7.2.*",
         "symfony/console": "7.2.*",
         "symfony/dotenv": "7.2.*",

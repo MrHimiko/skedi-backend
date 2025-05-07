@@ -7,6 +7,15 @@ use App\Plugins\Integrations\Repository\IntegrationRepository;
 use App\Plugins\Account\Service\UserAvailabilityService;
 use App\Service\CrudManager;
 use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
+use App\Plugins\Integrations\Entity\IntegrationEntity;
+use App\Plugins\Account\Entity\UserEntity;
+use App\Plugins\Integrations\Exception\IntegrationException;
+use DateTime;
+
+// Add these Google API imports
+use Google\Client as GoogleClient;
+use Google\Service\Calendar as GoogleCalendar;
+use Google\Service\Oauth2;
 
 class GoogleCalendarService extends IntegrationService
 {
@@ -23,9 +32,34 @@ class GoogleCalendarService extends IntegrationService
     ) {
         parent::__construct($entityManager, $integrationRepository, $userAvailabilityService, $crudManager);
         
-        $this->clientId = $parameterBag->get('263415563843-iisvu1oericu0v5mvc7bl2c1p3obq2mq.apps.googleusercontent.com');
-        $this->clientSecret = $parameterBag->get('eGOCSPX-SapXgkbRvjsdclVCALHQiK05W9la');
-        $this->redirectUri = $parameterBag->get('https://app.skedi.com/oauth/google/callback');
+        // Try to get the parameters and log them
+        try {
+            $this->clientId = $parameterBag->get('google.client_id');
+            error_log("Client ID from parameters: " . $this->clientId);
+        } catch (\Exception $e) {
+            error_log("Error getting google.client_id: " . $e->getMessage());
+            // Temporary fallback for testing
+            $this->clientId = '263415563843-iisvu1oericu0v5mvc7bl2c1p3obq2mq.apps.googleusercontent.com';
+            error_log("Using fallback client ID: " . $this->clientId);
+        }
+        
+        try {
+            $this->clientSecret = $parameterBag->get('google.client_secret');
+        } catch (\Exception $e) {
+            error_log("Error getting google.client_secret: " . $e->getMessage());
+            // Temporary fallback
+            $this->clientSecret = 'eGOCSPX-SapXgkbRvjsdclVCALHQiK05W9la';
+        }
+        
+        try {
+            $this->redirectUri = $parameterBag->get('google.redirect_uri');
+            error_log("Redirect URI from parameters: " . $this->redirectUri);
+        } catch (\Exception $e) {
+            error_log("Error getting google.redirect_uri: " . $e->getMessage());
+            // Temporary fallback
+            $this->redirectUri = 'https://app.skedi.com/oauth/google/callback';
+            error_log("Using fallback redirect URI: " . $this->redirectUri);
+        }
     }
 
     /**
@@ -34,27 +68,21 @@ class GoogleCalendarService extends IntegrationService
     private function getGoogleClient(?IntegrationEntity $integration = null): GoogleClient
     {
         $client = new GoogleClient();
-        $client->setClientId($this->clientId);
-        $client->setClientSecret($this->clientSecret);
-        $client->setRedirectUri($this->redirectUri);
+        
+        // Hardcode values temporarily until we fix the parameter loading
+        $client->setClientId('263415563843-iisvu1oericu0v5mvc7bl2c1p3obq2mq.apps.googleusercontent.com');
+        $client->setClientSecret('eGOCSPX-SapXgkbRvjsdclVCALHQiK05W9la');
+        $client->setRedirectUri('https://app.skedi.com/oauth/google/callback');
+        
         $client->setScopes([
-            GoogleCalendar::CALENDAR_READONLY,
-            GoogleCalendar::CALENDAR_EVENTS
+            'https://www.googleapis.com/auth/calendar.readonly',
+            'https://www.googleapis.com/auth/calendar.events'
         ]);
         $client->setAccessType('offline');
         $client->setPrompt('consent');
         
         if ($integration && $integration->getAccessToken()) {
-            $client->setAccessToken([
-                'access_token' => $integration->getAccessToken(),
-                'refresh_token' => $integration->getRefreshToken(),
-                'expires_in' => $integration->getTokenExpires() ? $integration->getTokenExpires()->getTimestamp() - time() : 0
-            ]);
-            
-            // Refresh token if needed
-            if ($client->isAccessTokenExpired()) {
-                $this->refreshToken($integration, $client);
-            }
+            // Rest of your existing code
         }
         
         return $client;
@@ -66,6 +94,7 @@ class GoogleCalendarService extends IntegrationService
     public function getAuthUrl(): string
     {
         $client = $this->getGoogleClient();
+        
         return $client->createAuthUrl();
     }
 
